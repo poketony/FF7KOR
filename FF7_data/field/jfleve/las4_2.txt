@@ -1,0 +1,26 @@
+---TEXT000---
+星の体内
+---TEXT001---
+{CLOUD}
+
+---TEXT002---
+{TIFA}
+
+---TEXT003---
+{YUFFIE}
+
+---TEXT004---
+{BARRET}
+
+---TEXT005---
+{RED XIII}
+
+---TEXT006---
+{VINCENT}
+
+---TEXT007---
+{CID}
+
+---TEXT008---
+{RED XIII}
+

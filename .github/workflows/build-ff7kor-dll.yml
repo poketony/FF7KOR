@@ -1,0 +1,29 @@
+name: Build ff7kor DLL
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "ff7kor-dll/**"
+      - ".github/workflows/build-ff7kor-dll.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build x86 DLL
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86
+          call ff7kor-dll\build_msvc_win32_cl.bat
+
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ff7kor-dll-win32
+          path: ff7kor-dll/build-msvc-win32-cl/ff7kor.dll
+          if-no-files-found: error

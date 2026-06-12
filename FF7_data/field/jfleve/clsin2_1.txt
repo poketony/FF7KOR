@@ -1,0 +1,17 @@
+---TEXT000---
+ディオ
+「ここまでだな」
+---TEXT001---
+{CLOUD}
+「まて、話を…」
+---TEXT002---
+{CAIT SITH}
+「{CLOUD}さん…」
+---TEXT003---
+闘技場
+---TEXT004---
+{VARDEC}
+{VARDEC}
+{VARDEC}
+---TEXT005---
+してる

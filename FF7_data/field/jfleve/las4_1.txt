@@ -1,0 +1,78 @@
+---TEXT000---
+大空洞内部
+---TEXT001---
+『ラックアップ』を手にいれた！
+---TEXT002---
+{TIFA}
+「ちょっと、私をおいてくつもり？」
+---TEXT003---
+{BARRET}
+「よう、チト遅れちまったか？」
+---TEXT004---
+{RED XIII}
+「おいてかないでよ、{CLOUD}」
+---TEXT005---
+{CID}
+「おまえたちだけじゃ
+　心配で行かせられねぇな」
+---TEXT006---
+{YUFFIE}
+「せっかく、ここまで来たんだから
+　先はこさせないよ」
+---TEXT007---
+{VINCENT}
+「せっかちなヤツだ」
+---TEXT008---
+{CAIT SITH}
+「はくじょうやなぁ、{CLOUD}さん」
+---TEXT009---
+【セーブポイント】
+メニューを開いて{PURPLE}「セーブ」{WHITE}を選ぶと
+ゲームの状態を保存できます。
+---TEXT010---
+ここに【セーブポイント】を
+作りますか？
+　　　はい
+　　　いいえ
+---TEXT011---
+{CLOUD}
+「{TIFA}は……？」
+---TEXT012---
+{CLOUD}
+「{BARRET}は……？」
+---TEXT013---
+{CLOUD}
+「{CID}は……？」
+---TEXT014---
+{CLOUD}
+「{RED XIII}は……？」
+---TEXT015---
+{CLOUD}
+「{CAIT SITH}は……？」
+---TEXT016---
+{CLOUD}
+「{YUFFIE}は……？」
+---TEXT017---
+{CLOUD}
+「{VINCENT}は……？」
+---TEXT018---
+{CLOUD}
+「{TIFA}たちは……？」
+---TEXT019---
+{CLOUD}
+「{BARRET}たちは……？」
+---TEXT020---
+{CLOUD}
+「{CID}たちは……？」
+---TEXT021---
+{CLOUD}
+「{RED XIII}たちは……？」
+---TEXT022---
+{CLOUD}
+「{CAIT SITH}たちは……？」
+---TEXT023---
+{CLOUD}
+「{YUFFIE}たちは……？」
+---TEXT024---
+{CLOUD}
+「{VINCENT}たちは……？」
