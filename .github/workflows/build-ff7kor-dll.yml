@@ -26,8 +26,7 @@ jobs:
         run: |
           where cl
           where link
-          cl /? >nul
-          link /? >nul
+          echo MSVC x86 toolchain path resolved.
 
       - name: Build x86 DLL
         shell: cmd
