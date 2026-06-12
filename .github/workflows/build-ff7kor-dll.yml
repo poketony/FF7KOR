@@ -18,7 +18,6 @@ jobs:
       - name: Build x86 DLL
         shell: cmd
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x86
           call ff7kor-dll\build_msvc_win32_cl.bat
 
       - name: Upload DLL artifact
