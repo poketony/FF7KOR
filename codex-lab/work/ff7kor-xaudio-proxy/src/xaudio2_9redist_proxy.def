@@ -1,0 +1,8 @@
+LIBRARY "XAudio2_9Redist"
+EXPORTS
+    XAudio2Create=xaudio2_9redist_orig.XAudio2Create @1
+    CreateAudioReverb=xaudio2_9redist_orig.CreateAudioReverb @2
+    CreateAudioVolumeMeter=xaudio2_9redist_orig.CreateAudioVolumeMeter @3
+    CreateFX=xaudio2_9redist_orig.CreateFX @4
+    X3DAudioCalculate=xaudio2_9redist_orig.X3DAudioCalculate @5
+    X3DAudioInitialize=xaudio2_9redist_orig.X3DAudioInitialize @6

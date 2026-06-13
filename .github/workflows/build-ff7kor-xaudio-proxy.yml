@@ -1,0 +1,47 @@
+name: Build ff7kor XAudio proxy
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "codex-lab/work/ff7kor-xaudio-proxy/**"
+      - ".github/workflows/build-ff7kor-xaudio-proxy.yml"
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC x64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Verify toolchain
+        shell: cmd
+        run: |
+          where cl
+          where link
+          echo MSVC x64 toolchain path resolved.
+
+      - name: Build x64 XAudio2 proxy
+        shell: cmd
+        run: |
+          call codex-lab\work\ff7kor-xaudio-proxy\build_msvc_x64_cl.bat
+
+      - name: Verify proxy artifact exists
+        shell: cmd
+        run: |
+          if not exist codex-lab\work\ff7kor-xaudio-proxy\build-msvc-x64-cl\xaudio2_9redist.dll exit /b 1
+          dir codex-lab\work\ff7kor-xaudio-proxy\build-msvc-x64-cl\xaudio2_9redist.dll
+
+      - name: Upload proxy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ff7kor-xaudio-proxy-win64
+          path: codex-lab/work/ff7kor-xaudio-proxy/build-msvc-x64-cl/xaudio2_9redist.dll
+          if-no-files-found: error

@@ -1,4 +1,8 @@
-/codex-lab
+/codex-lab/*
+!/codex-lab/work/
+/codex-lab/work/*
+!/codex-lab/work/ff7kor-xaudio-proxy/
+!/codex-lab/work/ff7kor-xaudio-proxy/**
 /기타 자료
 /PyFF7-master
 /tools
