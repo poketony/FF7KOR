@@ -2,7 +2,7 @@
 
 This folder builds an external Windows x64 runtime patcher for the native 2026 `FFVII.exe`.
 
-It does not modify `FFVII.exe` on disk. It validates runtime-decrypted code bytes, installs reversible detours in the live process, loads one Korean C0 font page through the native font-loader path when that path next runs, and maps Korean `C0 xx` text to that page.
+It does not modify `FFVII.exe` on disk. It validates runtime-decrypted code bytes, installs reversible detours in the live process, loads one Korean C0 font page through the native font-loader path, and maps Korean `C0 xx` text to that page.
 
 The first test glyph is:
 
@@ -72,11 +72,12 @@ The patcher:
 - locates the `FFVII.exe` module base
 - waits for runtime-decrypted signatures
 - writes `korean_c0_page.tim` into confirmed unused space in the native font-name allocation
-- installs a temporary hook at the existing native Japanese font loader
-- waits until the native loader creates a Korean C0 page handle
+- first attempts a direct native loader command using the current VM stack arguments, restoring `DAT_1420395C8` afterward
+- if direct loading returns no handle, installs a temporary hook at the existing native Japanese font loader
+- waits until either path creates a Korean C0 page handle
 - installs scanner and renderer detours only after that handle exists
 
-If the file copy fails because the Steam game folder is not writable, copy `resources/korean_font/korean_c0_page.tim` and `resources/korean_font/korean_c0_page.tex` manually into the same folder as `FFVII.exe` and rerun the patcher. If the loader hook does not run before timeout, the patcher restores that hook and reports failure. In that case, start the game again, run the patcher earlier, and stay on a screen where the menu/font resource lifecycle can run.
+If the file copy fails because the Steam game folder is not writable, copy `resources/korean_font/korean_c0_page.tim` and `resources/korean_font/korean_c0_page.tex` manually into the same folder as `FFVII.exe` and rerun the patcher. If both direct loading and the loader hook return no handle before timeout, the patcher restores the loader hook and reports failure. In that case, start the game again, run the patcher earlier, and stay on a screen where the menu/font resource lifecycle can run.
 
 ## Restore
 

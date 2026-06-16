@@ -9,7 +9,9 @@ Implemented in `codex-lab/poc_runtime_patch/c0_poc_patcher.cpp`:
 - Loads one generated Korean C0 font page: `codex-lab/resources/korean_font/korean_c0_page.tim`.
 - Stages that page beside the target `FFVII.exe` as `korean_c0_page.tim` before asking the native loader to resolve it.
 - Uses `txt.cpp` mapping, not Unicode order. The first selected glyph is `가 = C0 21`.
-- Installs a native loader hook at `FUN_14156df20`, RVA `0x156E100`.
+- First attempts a direct native loader command from a remote stub using the current `DAT_1420395C8` VM stack arguments.
+- Restores `DAT_1420395C8` after the direct loader command because `FUN_14004AB00` mutates the VM stack pointer.
+- Falls back to a native loader hook at `FUN_14156df20`, RVA `0x156E100`, when direct loading returns no handle.
 - Stores the Korean C0 native resource handle in a patcher-owned remote state block.
 - Patches `FUN_141571ec0`, RVA `0x15720B8`, so page selector `C0` uses the Korean C0 handle and then joins the original glyph UV/render path.
 - Patches common render scanner `FUN_1415724a0`, common width scanner `FUN_1415712b0`, field render scanner `FUN_14156e430`, and field layout scanner `FUN_1415714b0`.
@@ -19,14 +21,15 @@ Implemented in `codex-lab/poc_runtime_patch/c0_poc_patcher.cpp`:
 Safety behavior:
 
 - The patcher validates every expected runtime-decrypted byte sequence before patching.
-- Scanner/render detours are not installed until the native loader hook returns a nonzero Korean C0 handle.
+- Scanner/render detours are not installed until either direct loading or the native loader hook returns a nonzero Korean C0 handle.
 - `restore` writes back original overwrite bytes for all implemented hook sites.
 - No original `FFVII.exe` bytes are modified on disk.
 
 Known runtime dependency:
 
 - The hook uses the existing native `0x6710AC` font/resource loader command and passes the filename `korean_c0_page.tim` through confirmed unused space at `DAT_14207CDEC + 0xB8`.
-- If the native resolver cannot find the loose external resource by that name, install times out safely.
+- The first artifact timed out when `FUN_14156df20` did not execute again after the hook was installed; the direct-load attempt was added to reduce that timing dependency.
+- If the native resolver cannot find the loose external resource by that name, or if the resource command is only valid on the main thread and the fallback hook is never reached, install times out safely.
 
 Patch sites are recorded in `codex-lab/findings/poc_patch_sites.csv`.
 

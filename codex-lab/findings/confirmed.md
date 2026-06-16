@@ -20,6 +20,7 @@ Method:
   - `codex-lab/resources/korean_font/korean_c0_manifest.json`
 - `codex-lab/poc_runtime_patch/verify_first_korean_glyph_package.py` verifies that `C0 21` resolves to `U+AC00`, the TEX/TIM alias has a 1024x1024 header probe, and the selected destination cell contains non-empty glyph pixels.
 - Current runtime patch sites for the first field-visible POC are recorded in `codex-lab/findings/poc_patch_sites.csv`.
+- Runtime test of the first artifact confirmed that staging and signature validation succeeded, but a loader-hook-only install can time out when `FUN_14156df20` does not execute again after the hook is installed. The patcher now attempts a direct `FUN_14004AB00(0x6710AC, 5, ...)` load first and keeps the `FUN_14156df20` hook as fallback.
 
 ## PE and dump baseline
 

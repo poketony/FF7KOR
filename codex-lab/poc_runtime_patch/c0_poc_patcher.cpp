@@ -16,6 +16,7 @@ namespace {
 
 constexpr uint64_t kGlobalFontStructPtrRva = 0x207CE08;
 constexpr uint64_t kGlobalFontStructHandleRva = 0x207CDEC;
+constexpr uint64_t kGlobalVmStackPtrRva = 0x20395C8;
 constexpr uint32_t kFontFilenameScratchOffset = 0xB8;
 constexpr size_t kFontFilenameScratchSize = 0x80;
 
@@ -51,6 +52,13 @@ struct PatchSite {
 struct RemoteStateLocal {
     uint32_t korean_c0_handle;
     uint32_t filename_handle;
+    uint32_t direct_arg0;
+    uint32_t direct_arg1;
+    uint32_t direct_arg2;
+    uint32_t direct_arg3;
+    uint32_t saved_vm_stack;
+    uint32_t direct_result;
+    uint32_t direct_status;
 };
 
 std::wofstream g_log;
@@ -378,13 +386,105 @@ std::vector<uint8_t> MakeGlyphRendererStub(uint64_t module_base, uint64_t remote
     return b;
 }
 
+void AppendReadVmArgToState(std::vector<uint8_t>& b, uint64_t module_base, uint64_t remote_state,
+                            uint8_t vm_offset, uint8_t state_offset) {
+    AppendMovRdxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0x8b, 0x4a, 0x18,        // mov ecx,[rdx+0x18] ; saved DAT_1420395C8
+        0x83, 0xc1, vm_offset    // add ecx,vm_offset
+    });
+    AppendMovRaxImm64(b, module_base + 0x3f0a0);
+    b.insert(b.end(), {
+        0xff, 0xd0,              // call rax ; FUN_14003F0A0
+        0x31, 0xc9,              // xor ecx,ecx
+        0x48, 0x85, 0xc0,        // test rax,rax
+        0x74, 0x02,              // jz +2
+        0x8b, 0x08               // mov ecx,[rax]
+    });
+    AppendMovRdxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0x89, 0x4a, state_offset // mov [rdx+state_offset],ecx
+    });
+}
+
+std::vector<uint8_t> MakeDirectFontLoadStub(uint64_t module_base, uint64_t remote_state) {
+    const uint64_t vm_stack_ptr = module_base + kGlobalVmStackPtrRva;
+    const uint64_t load_command = module_base + 0x4ab00;
+    std::vector<uint8_t> b = {
+        0x48, 0x83, 0xec, 0x48   // sub rsp,0x48 ; shadow space + alignment
+    };
+
+    AppendMovRdxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0xc7, 0x42, 0x20, 0x01, 0x00, 0x00, 0x00 // mov dword ptr [rdx+0x20],1
+    });
+    AppendMovRaxImm64(b, vm_stack_ptr);
+    b.insert(b.end(), {
+        0x8b, 0x08,              // mov ecx,[rax] ; DAT_1420395C8
+    });
+    AppendMovRdxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0x89, 0x4a, 0x18         // mov [rdx+0x18],ecx
+    });
+
+    AppendReadVmArgToState(b, module_base, remote_state, 0x04, 0x08);
+    AppendReadVmArgToState(b, module_base, remote_state, 0x08, 0x0c);
+    AppendReadVmArgToState(b, module_base, remote_state, 0x0c, 0x10);
+    AppendReadVmArgToState(b, module_base, remote_state, 0x14, 0x14);
+
+    AppendMovR10Imm64(b, remote_state);
+    b.insert(b.end(), {
+        0x45, 0x8b, 0x42, 0x08,  // mov r8d,[r10+0x08]
+        0x45, 0x8b, 0x4a, 0x0c,  // mov r9d,[r10+0x0c]
+        0x41, 0x8b, 0x42, 0x10,  // mov eax,[r10+0x10]
+        0x89, 0x44, 0x24, 0x20,  // mov [rsp+0x20],eax
+        0x41, 0x8b, 0x42, 0x04,  // mov eax,[r10+0x04] ; filename handle
+        0x89, 0x44, 0x24, 0x28,  // mov [rsp+0x28],eax
+        0x41, 0x8b, 0x42, 0x14,  // mov eax,[r10+0x14]
+        0x89, 0x44, 0x24, 0x30,  // mov [rsp+0x30],eax
+        0xba, 0x05, 0x00, 0x00, 0x00, // mov edx,5
+        0xb9, 0xac, 0x10, 0x67, 0x00  // mov ecx,0x6710AC
+    });
+    AppendMovRaxImm64(b, load_command);
+    b.insert(b.end(), {
+        0xff, 0xd0               // call rax
+    });
+
+    AppendMovRdxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0x89, 0x02,              // mov [rdx],eax
+        0x89, 0x42, 0x1c,        // mov [rdx+0x1c],eax
+        0xc7, 0x42, 0x20, 0x02, 0x00, 0x00, 0x00, // mov dword ptr [rdx+0x20],2
+        0x8b, 0x4a, 0x18         // mov ecx,[rdx+0x18]
+    });
+    AppendMovRaxImm64(b, vm_stack_ptr);
+    b.insert(b.end(), {
+        0x89, 0x08               // mov [rax],ecx ; restore DAT_1420395C8
+    });
+    AppendMovRdxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0x8b, 0x02,              // mov eax,[rdx]
+        0x48, 0x83, 0xc4, 0x48,  // add rsp,0x48
+        0xc3                     // ret
+    });
+    return b;
+}
+
 std::vector<uint8_t> MakeFontLoaderHookStub(uint64_t module_base, uint64_t remote_state) {
     const uint64_t load_command = module_base + 0x4ab00;
+    const uint64_t vm_stack_ptr = module_base + kGlobalVmStackPtrRva;
     const uint64_t epilogue_continue = module_base + 0x156e10f;
     std::vector<uint8_t> b;
     AppendMovRaxImm64(b, remote_state);
     b.insert(b.end(), {0x83, 0x38, 0x00});              // cmp dword ptr [rax],0
     size_t jne_skip_load = AppendJcc8(b, 0x75);
+    AppendMovRdxImm64(b, remote_state);
+    AppendMovRaxImm64(b, vm_stack_ptr);
+    b.insert(b.end(), {
+        0x8b, 0x08,                                      // mov ecx,[rax]
+        0x89, 0x4a, 0x18                                 // mov [rdx+0x18],ecx
+    });
+    AppendMovRaxImm64(b, remote_state);
     b.insert(b.end(), {
         0x44, 0x8b, 0xce,                                // mov r9d,esi
         0x44, 0x8b, 0xc7,                                // mov r8d,edi
@@ -398,7 +498,13 @@ std::vector<uint8_t> MakeFontLoaderHookStub(uint64_t module_base, uint64_t remot
     AppendMovR10Imm64(b, load_command);
     b.insert(b.end(), {0x41, 0xff, 0xd2});               // call r10
     AppendMovRdxImm64(b, remote_state);
-    b.insert(b.end(), {0x89, 0x02});                     // mov [rdx],eax
+    b.insert(b.end(), {
+        0x89, 0x02,                                      // mov [rdx],eax
+        0x89, 0x42, 0x1c,                                // mov [rdx+0x1c],eax
+        0x8b, 0x4a, 0x18                                 // mov ecx,[rdx+0x18]
+    });
+    AppendMovRaxImm64(b, vm_stack_ptr);
+    b.insert(b.end(), {0x89, 0x08});                     // mov [rax],ecx
     size_t skip_load = b.size();
     b.insert(b.end(), {
         0x48, 0x8b, 0x6c, 0x24, 0x58,                    // mov rbp,[rsp+0x58]
@@ -842,6 +948,66 @@ bool WaitForKoreanHandle(HANDLE process, uint64_t remote_state, DWORD wait_ms, u
     return false;
 }
 
+bool TryDirectKoreanLoad(HANDLE process, uint64_t module_base, uint64_t remote_state, uint32_t* handle_out) {
+    std::vector<uint8_t> stub = MakeDirectFontLoadStub(module_base, remote_state);
+    LPVOID remote_stub = VirtualAllocEx(process, nullptr, stub.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (!remote_stub) {
+        Log(L"direct Korean load skipped: VirtualAllocEx failed error=" + std::to_wstring(GetLastError()));
+        return false;
+    }
+    uint64_t stub_addr = reinterpret_cast<uint64_t>(remote_stub);
+    if (!WriteMem(process, stub_addr, stub)) {
+        Log(L"direct Korean load skipped: stub write failed error=" + std::to_wstring(GetLastError()));
+        return false;
+    }
+    DWORD old_protect = 0;
+    if (!VirtualProtectEx(process, remote_stub, stub.size(), PAGE_EXECUTE_READ, &old_protect)) {
+        Log(L"direct Korean load skipped: VirtualProtectEx stub failed error=" +
+            std::to_wstring(GetLastError()));
+        return false;
+    }
+    FlushInstructionCache(process, remote_stub, stub.size());
+
+    Log(L"attempt direct Korean C0 page load via current VM stack args");
+    Log(L"  direct stub=" + Hex64(stub_addr) + L" stub bytes=" + HexBytes(stub));
+
+    HANDLE thread = CreateRemoteThread(process, nullptr, 0,
+                                       reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_stub),
+                                       nullptr, 0, nullptr);
+    if (!thread) {
+        Log(L"direct Korean load skipped: CreateRemoteThread failed error=" +
+            std::to_wstring(GetLastError()));
+        return false;
+    }
+    DWORD wait = WaitForSingleObject(thread, 10000);
+    DWORD exit_code = 0;
+    GetExitCodeThread(thread, &exit_code);
+    CloseHandle(thread);
+    if (wait != WAIT_OBJECT_0) {
+        Log(L"direct Korean load did not return within 10000 ms; leaving fallback loader hook path");
+        return false;
+    }
+
+    RemoteStateLocal state{};
+    if (!ReadMem(process, remote_state, &state, sizeof(state))) {
+        Log(L"direct Korean load finished, but remote state read failed");
+        return false;
+    }
+    Log(L"direct Korean load VM args: saved_sp=" + Hex64(state.saved_vm_stack) +
+        L" arg0=" + Hex64(state.direct_arg0) +
+        L" arg1=" + Hex64(state.direct_arg1) +
+        L" arg2=" + Hex64(state.direct_arg2) +
+        L" arg3=" + Hex64(state.direct_arg3));
+    Log(L"direct Korean load result: eax=" + Hex64(exit_code) +
+        L" stored_handle=" + Hex64(state.korean_c0_handle) +
+        L" status=" + std::to_wstring(state.direct_status));
+    if (state.korean_c0_handle == 0) {
+        return false;
+    }
+    *handle_out = state.korean_c0_handle;
+    return true;
+}
+
 bool Install(HANDLE process, DWORD pid, uint64_t module_base, const Options& opt) {
     std::vector<PatchSite> sites = Sites();
     uint64_t remote_state = 0;
@@ -852,20 +1018,23 @@ bool Install(HANDLE process, DWORD pid, uint64_t module_base, const Options& opt
     const PatchSite* loader = FindSite(PatchKind::FontLoaderHook, sites);
     if (!loader) return false;
 
-    {
-        SuspendedThreads suspended(pid, opt.suspend_threads);
-        if (!InstallOneSite(process, module_base, *loader, remote_state)) {
+    uint32_t korean_handle = 0;
+    if (!TryDirectKoreanLoad(process, module_base, remote_state, &korean_handle)) {
+        Log(L"direct Korean C0 page load did not produce a handle; installing loader hook fallback");
+        {
+            SuspendedThreads suspended(pid, opt.suspend_threads);
+            if (!InstallOneSite(process, module_base, *loader, remote_state)) {
+                return false;
+            }
+        }
+
+        Log(L"waiting for native font loader to create Korean C0 page handle, wait_ms=" +
+            std::to_wstring(opt.wait_ms));
+        if (!WaitForKoreanHandle(process, remote_state, opt.wait_ms, &korean_handle)) {
+            Log(L"abort: Korean C0 page handle was not created before timeout");
+            RestoreSites(process, pid, module_base, opt.suspend_threads, {*loader});
             return false;
         }
-    }
-
-    Log(L"waiting for native font loader to create Korean C0 page handle, wait_ms=" +
-        std::to_wstring(opt.wait_ms));
-    uint32_t korean_handle = 0;
-    if (!WaitForKoreanHandle(process, remote_state, opt.wait_ms, &korean_handle)) {
-        Log(L"abort: Korean C0 page handle was not created before timeout");
-        RestoreSites(process, pid, module_base, opt.suspend_threads, {*loader});
-        return false;
     }
     Log(L"Korean C0 page native handle: " + Hex64(korean_handle));
 
@@ -948,7 +1117,7 @@ int wmain(int argc, wchar_t** argv) {
     Log(L"process id: " + std::to_wstring(pid));
 
     HANDLE process = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_VM_WRITE |
-                                     PROCESS_VM_OPERATION,
+                                     PROCESS_VM_OPERATION | PROCESS_CREATE_THREAD,
                                  FALSE, pid);
     if (!process) {
         Log(L"OpenProcess failed error=" + std::to_wstring(GetLastError()));

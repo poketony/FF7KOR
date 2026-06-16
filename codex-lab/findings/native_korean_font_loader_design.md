@@ -14,7 +14,22 @@ Status: implemented as a first visible-glyph POC in `codex-lab/poc_runtime_patch
 - Static copied data occupies through `0xB7`.
 - The zeroed tail `0xB8..0x137` is used by the patcher as a temporary filename scratch slot for `korean_c0_page.tim`.
 
-## Loader Hook
+## Loader Paths
+
+The first artifact proved that installing only the `FUN_14156df20` epilogue hook is too timing-sensitive: when the patcher is run after the six Japanese pages have already loaded, the hook may never execute again and the Korean handle remains zero.
+
+The patcher now tries two loader paths:
+
+1. Direct loader attempt from an external remote stub.
+   - Reads the same VM-stack-derived arguments used by `FUN_14156df20` from `DAT_1420395C8 + 4`, `+8`, `+0xC`, and `+0x14`.
+   - Calls `FUN_14004AB00(0x6710AC, 5, arg0, arg1, arg2, DAT_14207CDEC + 0xB8, arg3)`.
+   - Stores the returned handle in patcher-owned remote state.
+   - Restores `DAT_1420395C8` after the call because `FUN_14004AB00` mutates the VM stack pointer.
+2. Fallback hook at the existing native Japanese font loader, described below.
+
+The scanner and renderer hooks are still installed only after one of these paths produces a nonzero Korean C0 handle.
+
+## Loader Hook Fallback
 
 Hook site:
 
@@ -39,6 +54,8 @@ FUN_14004AB00(0x6710AC, 5, EDI, ESI, EBP, DAT_14207CDEC + 0xB8, EBX)
 ```
 
 The returned native texture/resource handle is stored in a patcher-owned remote state block. The common glyph renderer detour reads that handle for Korean page C0.
+
+The hook also saves and restores `DAT_1420395C8` around the extra Korean loader call to avoid leaving an extra VM command result on the interpreter stack.
 
 ## Resource File
 
@@ -114,5 +131,6 @@ Remote allocations are left inert until the process exits.
 
 - The native resolver for `0x6710AC` may not accept a loose external file named `korean_c0_page.tim` even when it is staged beside `FFVII.exe`.
 - Staging may fail if the Steam game folder is not writable; in that case `korean_c0_page.tim` and `korean_c0_page.tex` can be copied manually beside `FFVII.exe`.
-- If `FUN_14156df20` does not run after the patcher installs its loader hook, the Korean handle remains zero and install fails safely.
+- The direct loader attempt runs from an external remote thread. It restores the VM stack pointer, but if the native resource command is main-thread-only it may still return zero; in that case the patcher falls back to the loader hook.
+- If direct loading returns zero and `FUN_14156df20` does not run after the patcher installs its loader hook, the Korean handle remains zero and install fails safely.
 - Full C1-CC page loading is not implemented in this vertical slice.
