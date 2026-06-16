@@ -8,22 +8,37 @@ Method:
 - A separate analysis overlay was created at `codex-lab/work/runtime_dump/FFVII_runtime_overlay.exe` by copying the original PE and replacing section bytes with runtime memory from the dump. The original `FFVII.exe` was not modified.
 - Ghidra headless was run against the separate overlay project under `codex-lab/work/ghidra_projects/FFVII_runtime_quick`; the user's open Ghidra database and the original binary were not edited.
 
-## First Korean glyph vertical slice
+## Korean menu_ja jafont extension vertical slice
 
-- `txt.cpp` is the authoritative Korean mapping source for this POC.
-- `FF7Text::caract_jp_c0[0x21]` maps to `가` (`U+AC00`), so the selected test encoding is `C0 21`.
-- The generated Korean C0 page places the `가` glyph at cell index `0x21` using pixels copied from the supplied Gulim shadow2x source atlas.
-- Generated runtime resources:
-  - `codex-lab/resources/korean_font/korean_c0_page.tim`
-  - `codex-lab/resources/korean_font/korean_c0_page.tex`
-  - `codex-lab/resources/korean_font/korean_c0_page.png`
-  - `codex-lab/resources/korean_font/korean_c0_manifest.json`
-- `codex-lab/poc_runtime_patch/verify_first_korean_glyph_package.py` verifies that `C0 21` resolves to `U+AC00`, the TEX/TIM alias has a 1024x1024 header probe, and the selected destination cell contains non-empty glyph pixels.
-- Current runtime patch sites for the first field-visible POC are recorded in `codex-lab/findings/poc_patch_sites.csv`.
-- Runtime test of the first artifact confirmed that staging and signature validation succeeded, but a loader-hook-only install can time out when `FUN_14156df20` does not execute again after the hook is installed. The patcher now attempts a direct `FUN_14004AB00(0x6710AC, 5, ...)` load first and keeps the `FUN_14156df20` hook as fallback.
-- Runtime test of the direct-load artifact showed `direct_arg0=0x20014C8`, `direct_arg1=0x2001F9C`, `direct_arg2=0x18FEFC`, `direct_arg3=0x20014C8`, and `stored_handle=0`. This confirms that arbitrary current `DAT_1420395C8` VM-stack values are not sufficient to recreate the font-loader context after the lifecycle has already passed.
-- Runtime test of the next artifact confirmed successful Korean font loading (`Korean C0 page native handle` was nonzero) and successful scanner/renderer hook installation, followed by a game exit back to the launcher. This confirms the loader path is working and makes the broad common `C0-CC` scanner the primary crash suspect while original resources remain unconverted.
-- The common render and width scanner detours now accept only exact `C0 21` for the first-glyph POC. This is a tactical runtime safety gate; the `txt.cpp` mapping remains authoritative for the final C0-CC Korean encoding.
+- `ff7K(PC).tbl` is the active byte-to-character source for the generated font pages.
+- The table is used exactly as page/slot data: `C0 xx` stays on the C0 page at slot `xx`; entries are not compacted or reordered.
+- Generated runtime resources are under `codex-lab/generated/menu_ja_jafont_ext_tbl_exact`.
+- The generated pages are `jafont_7.tex` through `jafont_19.tex`.
+- Page mapping:
+  - `C0 -> jafont_7.tex`
+  - `C1 -> jafont_8.tex`
+  - `C2 -> jafont_9.tex`
+  - `C3 -> jafont_10.tex`
+  - `C4 -> jafont_11.tex`
+  - `C5 -> jafont_12.tex`
+  - `C6 -> jafont_13.tex`
+  - `C7 -> jafont_14.tex`
+  - `C8 -> jafont_15.tex`
+  - `C9 -> jafont_16.tex`
+  - `CA -> jafont_17.tex`
+  - `CB -> jafont_18.tex`
+  - `CC -> jafont_19.tex`
+- The generated TEX files reopen through `PyFF7.tex.TEX` as `1024x1024` images and are each `4194540` bytes.
+- The source artwork style is `codex-lab/work/hangulfont-ksx1001-gulim-shadow2x`; glyph pixels are copied into the exact table destination slots.
+- Current runtime patch sites are recorded in `codex-lab/findings/poc_patch_sites.csv`.
+- The runtime patcher no longer stages or loads `korean_c0_page.tim` as a loose external file.
+- The runtime patcher loads additional pages through the existing native `jafont_%d.tim` resource resolver after the user inserts `jafont_7.tex` through `jafont_19.tex` into `menu_ja.lgp`.
+- Test target for visible field text is `jfleve.lgp`, field `md1stin`, Text 30.
+- Test phrase bytes for `가다신참` newline `날따라와`:
+
+```text
+C0 1A C2 60 C7 02 C9 A9 0A C1 91 C3 26 C3 80 C8 10 FF
+```
 
 ## PE and dump baseline
 

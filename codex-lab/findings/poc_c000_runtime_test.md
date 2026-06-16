@@ -1,177 +1,96 @@
-# First Korean Glyph Runtime Test Plan
+# menu_ja jafont Extension Runtime Test
 
-## Current test target
+This replaces the old `C0 00 -> FA 00` and loose `korean_c0_page.tim` test plan.
 
-This supersedes the earlier `C0 00 -> FA 00` menu-only POC test. The current vertical slice targets native 2026 field text from `jfleve.lgp`.
+## Required Resource Setup
 
-Selected field payload:
-
-```text
-B4 C0 21 B5 FF
-```
-
-Expected output:
+Insert these generated files into the game's `menu_ja.lgp`:
 
 ```text
-Ａ가Ｂ
+C:\Users\JO\FF7KOR\codex-lab\generated\menu_ja_jafont_ext_tbl_exact\jafont_7.tex
+...
+C:\Users\JO\FF7KOR\codex-lab\generated\menu_ja_jafont_ext_tbl_exact\jafont_19.tex
 ```
 
-Requirements:
+Do not copy them beside `FFVII.exe`.
 
-- `B4` renders first as full-width `Ａ`.
-- `C0 21` renders `가` from `resources/korean_font/korean_c0_page.tim`.
-- `B5` renders immediately after `가`, proving cursor advance is exactly two bytes for the Korean glyph.
-- `FF` terminates the FF7 text stream.
-- The `가` advance is one full native cell, width `0x40`.
-- Existing Japanese `FA-FE` rendering remains unchanged.
+## Field Text To Edit
 
-Patch command after launching FFVII:
+Edit:
+
+```text
+C:\Program Files (x86)\Steam\steamapps\common\FINAL FANTASY VII Steam Edition\ff7\workingdir\data\field\jfleve.lgp
+```
+
+Makou Reactor target:
+
+```text
+Field: md1stin
+Text: 30
+```
+
+Target phrase:
+
+```text
+가다신참
+날따라와
+```
+
+Expected byte sequence:
+
+```text
+C0 1A C2 60 C7 02 C9 A9 0A C1 91 C3 26 C3 80 C8 10 FF
+```
+
+If Makou Reactor emits a field-specific line-break control instead of raw `0A`, preserve that control sequence.
+
+## Patcher Launch Procedure
+
+Start the patcher before launching the game:
 
 ```bat
-c0_poc_patcher.exe install --process FFVII.exe --wait-ms 120000 --log first_korean_glyph_patch.log
+c0_poc_patcher.exe install --process FFVII.exe --wait-ms 120000 --log menu_jafont_extension_patch.log
 ```
 
-Do not enter the modified field scene until the log reports:
+When the patcher says it is waiting for `FFVII.exe`, launch the game.
+
+Continue only after the log shows:
 
 ```text
-Korean C0 page native handle: 0x...
+loader runtime signature validated
+extra menu jafont handles:
+scanner/renderer runtime signatures validated
 completed successfully
 ```
 
-Rollback:
+Then enter the field scene containing `md1stin` Text 30.
 
-```bat
-c0_poc_patcher.exe restore --process FFVII.exe --log first_korean_glyph_patch.log
-```
+## Expected Visual Result
 
-Detailed byte boundaries and edit guidance are in `codex-lab/findings/first_korean_glyph_test_vector.md`.
-
----
-
-# Historical C0 00 runtime test plan
-
-Goal: prove that `C0 00` behaves exactly like `FA 00` in the confirmed common menu render and width paths.
-
-## Test target
-
-Use the confirmed menu text path:
-
-- Render: `FUN_14106b4a0 -> FUN_141570730 -> FUN_1415724a0 -> FUN_141571ec0`
-- Width: `FUN_14106b4a0 -> FUN_141570050 -> FUN_1415712b0 -> FUN_141571220`
-
-Exact text resource for the first test:
-
-- Runtime FF7 text buffer resolved from the menu helper's text handle `0x91AA28`.
-- This handle is used in `FUN_14106b4a0` before calls to both `FUN_141570730` and `FUN_141570050`.
-
-Do not use a source string that passes through `FUN_1410732b0`, because that helper treats `00` as a terminator while normal FF7 text streams treat `00` as printable.
-
-## Patch install
-
-1. Build `poc_runtime_patch\c0_poc_patcher.exe`.
-2. Start FFVII and reach the menu path that exercises `FUN_14106b4a0`.
-3. Run:
-
-```bat
-poc_runtime_patch\c0_poc_patcher.exe install --process FFVII.exe --wait-ms 120000 --log poc_c000_patch.log
-```
-
-Expected install log:
-
-- target PID
-- module base
-- validated runtime signatures for both mandatory sites
-- two remote stub addresses
-- two detour byte sequences
-- success for both patch sites
-
-## Test bytes
-
-Use a short FF7 `0xFF`-terminated buffer. Keep one following visible single-byte character after the two-byte glyph to prove cursor behavior.
-
-Baseline original sequence:
+The dialogue box should show:
 
 ```text
-41 41 FF
+가다신참
+날따라와
 ```
 
-Control sequence:
+The glyphs must come from `jafont_7.tex` through `jafont_19.tex`, not from substituted Japanese glyphs.
 
-```text
-FA 00 41 FF
-```
+## Checks
 
-POC sequence:
+- The first character `가` renders from `C0 1A`.
+- `다`, `신`, `참`, `날`, `따`, `라`, and `와` render from their mapped pages.
+- Each Korean glyph consumes exactly two bytes.
+- The character after each Korean glyph is not shifted or swallowed.
+- Line break behavior is preserved.
+- `FF` terminates the string normally.
+- Existing Japanese `FA..FE` multibyte rendering still works.
+- The game does not return to the launcher after entering the scene.
 
-```text
-C0 00 41 FF
-```
-
-Where:
-
-- `FA 00` is the existing Japanese two-byte control case.
-- `C0 00` is the new POC case.
-- `41` is the following character used to prove the cursor advanced to `p+2`.
-- `FF` terminates the FF7 text stream.
-
-## Expected results
-
-Visual result:
-
-- `C0 00` displays the same glyph as `FA 00`.
-- The following `41` glyph renders immediately after the same advance as in the `FA 00 41 FF` control case.
-- No extra blank/space glyph appears from the `00` byte.
-
-Width result:
-
-- `C0 00 41 FF` measures exactly the same as `FA 00 41 FF`.
-- The raw glyph helper behavior for `FA00` is default width `0x40`; wrapper-scaled width must match the control sequence.
-
-Cursor result:
-
-- Starting cursor `p` at the lead byte:
-  - after `C0`: pending prefix is `FA00`, cursor is `p+1`
-  - after following `00`: encoded glyph is `FA00`, cursor is `p+2`
-  - following `41` is processed as the next character
-
-No acceptable outcomes:
-
-- `C0` renders as a single-byte glyph.
-- `00` renders as a separate space after `C0`.
-- Cursor advances to `p+1` or `p+3`.
-- `FA-FE` behavior changes.
-- Non-`C0` single-byte strings change.
-
-## Manual runtime buffer procedure
-
-Because the first test must avoid `FUN_1410732b0`, modify an already-resolved FF7 text buffer at runtime, not a C-string source.
-
-Recommended debugger/memory-editor flow:
-
-1. Break on `FFVII.exe + 0x106BCEA`, the direct `FUN_14106b4a0 -> FUN_141570730` render wrapper call.
-2. Confirm the call is using the text handle/pointer family associated with `0x91AA28`.
-3. Resolve the actual buffer pointer through the same runtime state before the wrapper call, or inspect the resolved text pointer inside `FUN_141570730` after its `FUN_14003f0a0` call.
-4. Save the original bytes from that buffer.
-5. Replace the buffer with `FA 00 41 FF` and observe the control result.
-6. Replace the same buffer with `C0 00 41 FF` and observe the POC result.
-7. Restore the saved original buffer bytes.
-
-## Crash and corruption checks
-
-- The game must not crash when entering the menu.
-- The patcher log must show both mandatory sites succeeded.
-- Existing `FA 00 41 FF` must still work after patch install.
-- A normal single-byte sequence such as `41 41 FF` must still render normally.
-- Width and visual advance of the following `41` must match between `FA 00 41 FF` and `C0 00 41 FF`.
-
-## Rollback
-
-To disable the runtime patch:
+## Restore
 
 ```bat
-poc_runtime_patch\c0_poc_patcher.exe restore --process FFVII.exe --log poc_c000_patch.log
+c0_poc_patcher.exe restore --process FFVII.exe --log menu_jafont_extension_patch.log
 ```
 
-Then restore the menu text buffer bytes saved before the test.
-
-Full rollback is also achieved by closing `FFVII.exe`, because no on-disk executable bytes are modified.
+Closing `FFVII.exe` also removes runtime patches because the original executable is not modified on disk.

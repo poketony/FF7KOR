@@ -5,7 +5,12 @@
 !/codex-lab/work/ff7kor-xaudio-proxy/
 !/codex-lab/work/ff7kor-xaudio-proxy/**
 !/codex-lab/generated/
+/codex-lab/generated/*
 !/codex-lab/generated/korean_mapping.json
+!/codex-lab/generated/menu_ja_jafont_ext_tbl_exact/
+!/codex-lab/generated/menu_ja_jafont_ext_tbl_exact/**
+!/codex-lab/tools/
+!/codex-lab/tools/build_menu_jafont_extension.py
 !/codex-lab/resources/
 !/codex-lab/resources/korean_font/
 !/codex-lab/resources/korean_font/**

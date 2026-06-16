@@ -1,45 +1,81 @@
-name: Build first Korean glyph POC patcher
+name: Build menu_ja jafont extension patcher
 
 on:
   workflow_dispatch:
   push:
     paths:
       - "codex-lab/poc_runtime_patch/**"
-      - "codex-lab/resources/korean_font/**"
-      - "codex-lab/generated/korean_mapping.json"
+      - "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/**"
+      - "codex-lab/tools/build_menu_jafont_extension.py"
       - "codex-lab/findings/poc_patch_sites.csv"
-      - "codex-lab/findings/first_korean_glyph_test_vector.md"
+      - "codex-lab/findings/menu_ja_jafont_extension_assets.md"
+      - "ff7K(PC).tbl"
       - ".github/workflows/build-c0-poc-patcher.yml"
   pull_request:
     paths:
       - "codex-lab/poc_runtime_patch/**"
-      - "codex-lab/resources/korean_font/**"
-      - "codex-lab/generated/korean_mapping.json"
+      - "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/**"
+      - "codex-lab/tools/build_menu_jafont_extension.py"
       - "codex-lab/findings/poc_patch_sites.csv"
-      - "codex-lab/findings/first_korean_glyph_test_vector.md"
+      - "codex-lab/findings/menu_ja_jafont_extension_assets.md"
+      - "ff7K(PC).tbl"
       - ".github/workflows/build-c0-poc-patcher.yml"
 
 jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 10
-    env:
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: "utf-8"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate Korean TEX resource
+      - name: Verify generated menu_ja font pages
         shell: pwsh
         run: |
-          python codex-lab/resources/korean_font/build_tex_from_png.py
+          $root = "codex-lab/generated/menu_ja_jafont_ext_tbl_exact"
+          if (!(Test-Path $root)) {
+            throw "Missing generated asset folder: $root"
+          }
 
-      - name: Verify Korean mapping and font package
-        shell: pwsh
-        run: |
-          python codex-lab/poc_runtime_patch/verify_first_korean_glyph_package.py
+          $texFiles = Get-ChildItem $root -Filter "jafont_*.tex" | Sort-Object Name
+          if ($texFiles.Count -ne 13) {
+            throw "Expected 13 generated TEX pages, found $($texFiles.Count)"
+          }
+
+          foreach ($n in 7..19) {
+            $path = Join-Path $root "jafont_$n.tex"
+            if (!(Test-Path $path)) {
+              throw "Missing generated TEX page: $path"
+            }
+            $item = Get-Item $path
+            if ($item.Length -le 0) {
+              throw "Generated TEX page has zero size: $path"
+            }
+          }
+
+          $mapPath = Join-Path $root "menu_jafont_extension_mapping.json"
+          if (!(Test-Path $mapPath)) {
+            throw "Missing mapping JSON: $mapPath"
+          }
+          $map = Get-Content $mapPath -Raw -Encoding UTF8 | ConvertFrom-Json
+
+          $checks = @{
+            "C01A" = "U+AC00"
+            "C260" = "U+B2E4"
+            "C702" = "U+C2E0"
+            "C9A9" = "U+CC38"
+            "C810" = "U+C640"
+          }
+          foreach ($key in $checks.Keys) {
+            $entry = $map.byte_to_unicode.PSObject.Properties[$key].Value
+            if ($null -eq $entry) {
+              throw "Missing mapping entry: $key"
+            }
+            if ($entry.unicode -ne $checks[$key]) {
+              throw "Unexpected Unicode for $key: $($entry.unicode), expected $($checks[$key])"
+            }
+          }
 
       - name: Build x64 Release patcher
         shell: cmd
@@ -83,29 +119,27 @@ jobs:
       - name: Stage artifact files
         shell: pwsh
         run: |
-          $stage = "artifact/ff7-2026-first-korean-glyph-poc-windows-x64"
+          $stage = "artifact/ff7-2026-menu-ja-jafont-extension-windows-x64"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          New-Item -ItemType Directory -Force -Path "$stage/resources/korean_font" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage/generated/menu_ja_jafont_ext_tbl_exact" | Out-Null
           New-Item -ItemType Directory -Force -Path "$stage/findings" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$stage/generated" | Out-Null
 
           Copy-Item "codex-lab/poc_runtime_patch/c0_poc_patcher.exe" $stage
           Copy-Item "codex-lab/poc_runtime_patch/README.md" $stage
-          Copy-Item "codex-lab/resources/korean_font/korean_c0_page.tim" "$stage/resources/korean_font/"
-          Copy-Item "codex-lab/resources/korean_font/korean_c0_page.tex" "$stage/resources/korean_font/"
-          Copy-Item "codex-lab/resources/korean_font/korean_c0_page.png" "$stage/resources/korean_font/"
-          Copy-Item "codex-lab/resources/korean_font/korean_c0_page_preview.png" "$stage/resources/korean_font/"
-          Copy-Item "codex-lab/resources/korean_font/selected_glyph_ga_c021.png" "$stage/resources/korean_font/"
-          Copy-Item "codex-lab/resources/korean_font/korean_c0_manifest.json" "$stage/resources/korean_font/"
-          Copy-Item "codex-lab/generated/korean_mapping.json" "$stage/generated/"
+          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/jafont_*.tex" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
+          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/menu_jafont_extension_mapping.csv" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
+          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/menu_jafont_extension_mapping.json" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
+          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/README.md" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
+          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/menu_jafont_extension_duplicates.csv" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
+
           if (Test-Path "codex-lab/findings/poc_patch_sites.csv") {
             Copy-Item "codex-lab/findings/poc_patch_sites.csv" "$stage/findings/"
           }
+          if (Test-Path "codex-lab/findings/menu_ja_jafont_extension_assets.md") {
+            Copy-Item "codex-lab/findings/menu_ja_jafont_extension_assets.md" "$stage/findings/"
+          }
           if (Test-Path "codex-lab/findings/first_korean_glyph_test_vector.md") {
             Copy-Item "codex-lab/findings/first_korean_glyph_test_vector.md" "$stage/findings/"
-          }
-          if (Test-Path "codex-lab/findings/existing_korean_font_mapping.csv") {
-            Copy-Item "codex-lab/findings/existing_korean_font_mapping.csv" "$stage/findings/"
           }
 
           $timestamp = (Get-Date).ToUniversalTime().ToString("o")
@@ -119,6 +153,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ff7-2026-first-korean-glyph-poc-windows-x64
-          path: artifact/ff7-2026-first-korean-glyph-poc-windows-x64/**
+          name: ff7-2026-menu-ja-jafont-extension-windows-x64
+          path: artifact/ff7-2026-menu-ja-jafont-extension-windows-x64/**
           if-no-files-found: error

@@ -1,88 +1,88 @@
-# First Korean Glyph Test Vector
+# Field Text Test Vector
 
-Goal: after the runtime patcher reports successful Korean C0 page loading, edit one field text entry in `jfleve.lgp` so the native 2026 field renderer displays one genuine Korean glyph.
+This is the current visible Korean field test.
 
-## Selected Glyph
+## File To Edit
 
-| Property | Value |
-|---|---|
-| Character | `가` |
-| Unicode | `U+AC00` |
-| Korean encoding | `C0 21` |
-| Korean page | `C0`, page 0 |
-| Glyph index | `0x21` |
-| Width/advance | `64` native glyph units |
-
-`C0 21` comes directly from `txt.cpp` table `FF7Text::caract_jp_c0[0x21]`.
-
-## Surrounding Characters
-
-The surrounding visible characters use the confirmed Japanese FF7 table, not PC ASCII:
-
-| Intended display | FF7 byte | Unicode |
-|---|---:|---|
-| `Ａ` | `B4` | `U+FF21` |
-| `Ｂ` | `B5` | `U+FF22` |
-| terminator | `FF` | FF7 text terminator |
-
-## Exact Test Bytes
-
-Recommended field text payload:
+Edit this game archive:
 
 ```text
-B4 C0 21 B5 FF
+C:\Program Files (x86)\Steam\steamapps\common\FINAL FANTASY VII Steam Edition\ff7\workingdir\data\field\jfleve.lgp
 ```
 
-Byte boundaries:
-
-- `B4`: leading visible control character `Ａ`
-- `C0 21`: Korean two-byte glyph `가`
-- `B5`: following visible character `Ｂ`
-- `FF`: FF7 string terminator
-
-Expected rendered output:
+Makou Reactor target:
 
 ```text
-Ａ가Ｂ
+Field: md1stin
+Text: 30
 ```
 
-Expected cursor behavior:
+These bytes are field dialogue bytes. They do not go into `menu_ja.lgp`.
 
-- `B4` renders first.
-- `C0` sets Korean pending prefix and advances cursor to `p+1`.
-- `21` completes glyph `C0 21`, renders `가`, and advances cursor to `p+2`.
-- `B5` renders as the next character, proving the trail byte was not processed again.
-- `FF` terminates the FF7 string.
+## Font Resource File Set
 
-## Control Checks
+The matching font pages are:
 
-Before editing the target text permanently, keep a copy of the original bytes.
-
-Recommended checks:
-
-- Baseline: original field text loads without the patch.
-- Patched: `B4 C0 21 B5 FF` renders `Ａ가Ｂ`.
-- Following character check: `Ｂ` must appear immediately after `가`.
-- Width check: the gap after `가` should match a 64-unit full-cell glyph.
-- Terminator check: no garbage text appears after `Ｂ`.
-- Japanese regression check: existing `FA-FE` Japanese multibyte text still renders on original pages.
-
-Avoid trail bytes `00` and `FF` for this first test. The selected trail byte `21` is safe for normal FF7 text streams and avoids known NUL/terminator-sensitive helper paths.
-
-## Runtime Command
-
-After launching the game:
-
-```bat
-c0_poc_patcher.exe install --process FFVII.exe --wait-ms 120000 --log first_korean_glyph_patch.log
+```text
+C:\Users\JO\FF7KOR\codex-lab\generated\menu_ja_jafont_ext_tbl_exact\jafont_7.tex
+...
+C:\Users\JO\FF7KOR\codex-lab\generated\menu_ja_jafont_ext_tbl_exact\jafont_19.tex
 ```
 
-Only enter the modified field scene after the patcher log says `completed successfully`.
+Insert those into `menu_ja.lgp`.
 
-Rollback:
+## Phrase
 
-```bat
-c0_poc_patcher.exe restore --process FFVII.exe --log first_korean_glyph_patch.log
+Target text:
+
+```text
+가다신참
+날따라와
 ```
 
-Closing `FFVII.exe` also removes all runtime patches because the original executable is never modified on disk.
+Table-exact bytes from `ff7K(PC).tbl`:
+
+```text
+C0 1A C2 60 C7 02 C9 A9 0A C1 91 C3 26 C3 80 C8 10 FF
+```
+
+Breakdown:
+
+| character | bytes | font page | slot |
+| --- | --- | --- | --- |
+| 가 | `C0 1A` | `jafont_7.tex` | `0x1A` |
+| 다 | `C2 60` | `jafont_9.tex` | `0x60` |
+| 신 | `C7 02` | `jafont_14.tex` | `0x02` |
+| 참 | `C9 A9` | `jafont_16.tex` | `0xA9` |
+| line break | `0A` | not a glyph | not a glyph |
+| 날 | `C1 91` | `jafont_8.tex` | `0x91` |
+| 따 | `C3 26` | `jafont_10.tex` | `0x26` |
+| 라 | `C3 80` | `jafont_10.tex` | `0x80` |
+| 와 | `C8 10` | `jafont_15.tex` | `0x10` |
+| terminator | `FF` | not a glyph | not a glyph |
+
+If Makou Reactor emits a field-specific line-break/control sequence instead of raw `0A`, preserve Makou's actual line-break bytes and only replace the visible character byte pairs.
+
+## Temporary Japanese Input Before Makou Encoding Update
+
+Until Makou Reactor is updated to use the new Korean table, the current Japanese table can be used to emit the same bytes:
+
+| Korean | bytes | current Japanese-table input |
+| --- | --- | --- |
+| 가 | `C0 1A` | `Ｍゼ` |
+| 다 | `C2 60` | `Ｏチ` |
+| 신 | `C7 02` | `Ｔビ` |
+| 참 | `C9 A9` | `Ｖぅ` |
+| 날 | `C1 91` | `Ｎや` |
+| 따 | `C3 26` | `Ｐド` |
+| 라 | `C3 80` | `Ｐム` |
+| 와 | `C8 10` | `Ｕゲ` |
+
+## Expected Runtime Behavior
+
+- `C0..CC` bytes are treated as Korean page leads.
+- The next byte is consumed as the slot inside that page.
+- Cursor advance is exactly two bytes per Korean glyph.
+- The following glyph is not shifted or consumed as a trail byte.
+- `FF` remains the FF7 string terminator.
+- Existing `FA..FE` Japanese multibyte rendering remains unchanged.

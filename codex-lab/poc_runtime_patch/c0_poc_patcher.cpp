@@ -4,6 +4,8 @@
 #include <tlhelp32.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <fstream>
 #include <iomanip>
@@ -19,18 +21,19 @@ namespace {
 constexpr uint64_t kGlobalFontStructPtrRva = 0x207CE08;
 constexpr uint64_t kGlobalFontStructHandleRva = 0x207CDEC;
 constexpr uint64_t kGlobalVmStackPtrRva = 0x20395C8;
-constexpr uint32_t kFontFilenameScratchOffset = 0xB8;
-constexpr size_t kFontFilenameScratchSize = 0x80;
+constexpr uint32_t kFirstKoreanLead = 0xC0;
+constexpr uint32_t kLastKoreanLead = 0xCC;
+constexpr uint32_t kFirstExtraJafontPage = 7;
+constexpr size_t kExtraJafontPageCount = kLastKoreanLead - kFirstKoreanLead + 1;
+constexpr size_t kNativeNameSlotSize = 0x14;
 
 struct Options {
     std::wstring action = L"install";
     std::wstring process_name = L"FFVII.exe";
-    std::wstring font_path;
-    std::string native_font_name = "korean_c0_page.tim";
     DWORD pid = 0;
     DWORD wait_ms = 120000;
     bool suspend_threads = true;
-    std::wstring log_path = L"first_korean_glyph_patch.log";
+    std::wstring log_path = L"menu_jafont_extension_patch.log";
 };
 
 enum class PatchKind {
@@ -39,9 +42,7 @@ enum class PatchKind {
     FieldRender,
     FieldLayout,
     GlyphRenderer,
-    FieldWrapperOverlay,
-    FieldGlyphOverlay,
-    FontLoaderHook,
+    ExtraJafontLoaderHook,
 };
 
 struct PatchSite {
@@ -54,7 +55,7 @@ struct PatchSite {
 };
 
 struct RemoteStateLocal {
-    uint32_t korean_c0_handle;
+    uint32_t extra_jafont_handles[kExtraJafontPageCount];
     uint32_t filename_handle;
     uint32_t direct_arg0;
     uint32_t direct_arg1;
@@ -64,7 +65,7 @@ struct RemoteStateLocal {
     uint32_t direct_result;
     uint32_t direct_status;
     uint8_t reserved_to_filename[0x1c];
-    char native_name[kFontFilenameScratchSize];
+    char extra_jafont_names[kExtraJafontPageCount][kNativeNameSlotSize];
 };
 
 std::wofstream g_log;
@@ -109,74 +110,6 @@ uint32_t ParseU32(const std::wstring& s) {
     return static_cast<uint32_t>(std::stoul(s, nullptr, 0));
 }
 
-std::wstring SelfDirectory() {
-    std::vector<wchar_t> buf(MAX_PATH);
-    DWORD len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-    while (len == buf.size()) {
-        buf.resize(buf.size() * 2);
-        len = GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
-    }
-    std::wstring path(buf.data(), len);
-    size_t slash = path.find_last_of(L"\\/");
-    return slash == std::wstring::npos ? L"." : path.substr(0, slash);
-}
-
-bool FileExists(const std::wstring& path) {
-    DWORD attrs = GetFileAttributesW(path.c_str());
-    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
-}
-
-std::wstring ParentDirectory(const std::wstring& path) {
-    size_t slash = path.find_last_of(L"\\/");
-    return slash == std::wstring::npos ? L"." : path.substr(0, slash);
-}
-
-std::wstring JoinPath(const std::wstring& a, const std::wstring& b) {
-    if (a.empty()) return b;
-    wchar_t last = a.back();
-    if (last == L'\\' || last == L'/') return a + b;
-    return a + L"\\" + b;
-}
-
-std::wstring DefaultFontPath() {
-    std::wstring dir = SelfDirectory();
-    std::wstring packaged = JoinPath(dir, L"resources\\korean_font\\korean_c0_page.tim");
-    if (FileExists(packaged)) return packaged;
-    return JoinPath(dir, L"korean_c0_page.tim");
-}
-
-std::wstring FullPath(const std::wstring& path) {
-    DWORD need = GetFullPathNameW(path.c_str(), 0, nullptr, nullptr);
-    if (!need) return path;
-    std::vector<wchar_t> buf(need + 1);
-    DWORD got = GetFullPathNameW(path.c_str(), static_cast<DWORD>(buf.size()), buf.data(), nullptr);
-    if (!got) return path;
-    return std::wstring(buf.data(), got);
-}
-
-std::wstring ReplaceExtension(const std::wstring& path, const std::wstring& extension) {
-    size_t slash = path.find_last_of(L"\\/");
-    size_t dot = path.find_last_of(L'.');
-    if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash)) {
-        return path + extension;
-    }
-    return path.substr(0, dot) + extension;
-}
-
-bool GetProcessImagePath(HANDLE process, std::wstring* out) {
-    std::vector<wchar_t> buf(MAX_PATH);
-    DWORD size = static_cast<DWORD>(buf.size());
-    while (true) {
-        if (QueryFullProcessImageNameW(process, 0, buf.data(), &size)) {
-            *out = std::wstring(buf.data(), size);
-            return true;
-        }
-        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) return false;
-        buf.resize(buf.size() * 2);
-        size = static_cast<DWORD>(buf.size());
-    }
-}
-
 void AppendU32(std::vector<uint8_t>& out, uint32_t v) {
     for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>((v >> (i * 8)) & 0xff));
 }
@@ -204,6 +137,18 @@ void AppendMovRaxImm64(std::vector<uint8_t>& out, uint64_t value) {
 void AppendMovRdxImm64(std::vector<uint8_t>& out, uint64_t value) {
     out.push_back(0x48);
     out.push_back(0xBA);
+    AppendU64(out, value);
+}
+
+void AppendMovRsiImm64(std::vector<uint8_t>& out, uint64_t value) {
+    out.push_back(0x48);
+    out.push_back(0xBE);
+    AppendU64(out, value);
+}
+
+void AppendMovRdiImm64(std::vector<uint8_t>& out, uint64_t value) {
+    out.push_back(0x48);
+    out.push_back(0xBF);
     AppendU64(out, value);
 }
 
@@ -267,12 +212,11 @@ std::vector<uint8_t> MakeCommonRenderStub(uint64_t module_base) {
     std::vector<uint8_t> b = {
         0x80, 0xf9, 0xc0,             // cmp cl,0xC0
     };
-    size_t jne_original = AppendJcc8(b, 0x75);
+    size_t jb_original = AppendJcc8(b, 0x72);
+    b.insert(b.end(), {0x80, 0xf9, 0xcc}); // cmp cl,0xCC
+    size_t ja_original = AppendJcc8(b, 0x77);
     b.insert(b.end(), {
-        0x41, 0x80, 0x7d, 0x00, 0x21, // cmp byte ptr [r13],0x21
-    });
-    size_t jne_original_trail = AppendJcc8(b, 0x75);
-    b.insert(b.end(), {
+        0x44, 0x0f, 0xb7, 0xc9,       // movzx r9d,cx
         0x0f, 0xb6, 0xd9,             // movzx ebx,cl
         0x66, 0xc1, 0xe3, 0x08        // shl bx,8
     });
@@ -288,8 +232,8 @@ std::vector<uint8_t> MakeCommonRenderStub(uint64_t module_base) {
     AppendAbsJmp(b, return_to_shl);
     size_t not_prefix_label = b.size();
     AppendAbsJmp(b, not_prefix);
-    PatchJcc8(b, jne_original, original);
-    PatchJcc8(b, jne_original_trail, original);
+    PatchJcc8(b, jb_original, original);
+    PatchJcc8(b, ja_original, original);
     PatchJcc8(b, ja_not_prefix, not_prefix_label);
     return b;
 }
@@ -300,11 +244,9 @@ std::vector<uint8_t> MakeCommonWidthStub(uint64_t module_base) {
     std::vector<uint8_t> b = {
         0x3c, 0xc0                    // cmp al,0xC0
     };
-    size_t jne_original = AppendJcc8(b, 0x75);
-    b.insert(b.end(), {
-        0x41, 0x80, 0x3e, 0x21        // cmp byte ptr [r14],0x21
-    });
-    size_t jne_original_trail = AppendJcc8(b, 0x75);
+    size_t jb_original = AppendJcc8(b, 0x72);
+    b.insert(b.end(), {0x3c, 0xcc});   // cmp al,0xCC
+    size_t ja_original = AppendJcc8(b, 0x77);
     b.insert(b.end(), {
         0x44, 0x0f, 0xb6, 0xc0,       // movzx r8d,al
         0x66, 0x41, 0xc1, 0xe0, 0x08  // shl r8w,8
@@ -323,8 +265,8 @@ std::vector<uint8_t> MakeCommonWidthStub(uint64_t module_base) {
     AppendAbsJmp(b, loop_continue);
     size_t not_prefix_label = b.size();
     AppendAbsJmp(b, not_prefix);
-    PatchJcc8(b, jne_original, original);
-    PatchJcc8(b, jne_original_trail, original);
+    PatchJcc8(b, jb_original, original);
+    PatchJcc8(b, ja_original, original);
     PatchJcc8(b, ja_not_prefix, not_prefix_label);
     return b;
 }
@@ -404,10 +346,17 @@ std::vector<uint8_t> MakeGlyphRendererStub(uint64_t module_base, uint64_t remote
         0x4c, 0x89, 0xbc, 0x24, 0xe0, 0x00, 0x00, 0x00,  // mov [rsp+0xe0],r15
         0x3d, 0xc0, 0x00, 0x00, 0x00                    // cmp eax,0xC0
     };
-    size_t jne_original = AppendJcc8(b, 0x75);
-    AppendMovRaxImm64(b, remote_state);
+    size_t jb_original = AppendJcc8(b, 0x72);
     b.insert(b.end(), {
-        0x8b, 0x38,                                      // mov edi,[rax]
+        0x3d, 0xcc, 0x00, 0x00, 0x00                    // cmp eax,0xCC
+    });
+    size_t ja_original = AppendJcc8(b, 0x77);
+    b.insert(b.end(), {
+        0x2d, 0xc0, 0x00, 0x00, 0x00                    // sub eax,0xC0
+    });
+    AppendMovR10Imm64(b, remote_state);
+    b.insert(b.end(), {
+        0x41, 0x8b, 0x3c, 0x82,                          // mov edi,[r10+rax*4]
         0x85, 0xff                                       // test edi,edi
     });
     size_t jz_default = AppendJcc8(b, 0x74);
@@ -417,132 +366,9 @@ std::vector<uint8_t> MakeGlyphRendererStub(uint64_t module_base, uint64_t remote
     AppendAbsJmp(b, original_branch);
     size_t default_label = b.size();
     AppendAbsJmp(b, default_return);
-    PatchJcc8(b, jne_original, original);
+    PatchJcc8(b, jb_original, original);
+    PatchJcc8(b, ja_original, original);
     PatchJcc8(b, jz_default, default_label);
-    return b;
-}
-
-std::vector<uint8_t> MakeFieldWrapperOverlayStub(uint64_t module_base, uint64_t trampoline) {
-    const uint64_t glyph_renderer = module_base + 0x1571ec0;
-    std::vector<uint8_t> b = {
-        0x48, 0x83, 0xec, 0x40                         // sub rsp,0x40
-    };
-    AppendMovRaxImm64(b, trampoline);
-    b.insert(b.end(), {0xff, 0xd0});                    // call trampoline/original wrapper
-    b.insert(b.end(), {
-        0xb9, 0x38, 0x00, 0x00, 0x00,                  // mov ecx,0x38 ; x
-        0xba, 0x48, 0x00, 0x00, 0x00,                  // mov edx,0x48 ; y
-        0xb8, 0xcd, 0xcc, 0xcc, 0x3d,                  // mov eax,0.1f bits
-        0x66, 0x0f, 0x6e, 0xd0,                        // movd xmm2,eax
-        0x41, 0xb9, 0x21, 0xc0, 0x00, 0x00,            // mov r9d,0xC021
-        0xc7, 0x44, 0x24, 0x20, 0x07, 0x00, 0x00, 0x00,// mov [rsp+0x20],7
-        0xc7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00,// mov [rsp+0x28],0
-        0xc7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00 // mov [rsp+0x30],0
-    });
-    AppendMovRaxImm64(b, glyph_renderer);
-    b.insert(b.end(), {
-        0xff, 0xd0,                                    // call glyph renderer
-        0x48, 0x83, 0xc4, 0x40,                        // add rsp,0x40
-        0xc3                                           // ret
-    });
-    return b;
-}
-
-std::vector<uint8_t> MakeFieldGlyphOverlayTrampoline(uint64_t module_base, uint64_t target) {
-    std::vector<uint8_t> b = {
-        0x48, 0x89, 0x5c, 0x24, 0x08,                  // mov [rsp+8],rbx
-        0x57,                                           // push rdi
-        0x48, 0x83, 0xec, 0x20                          // sub rsp,0x20
-    };
-    AppendMovRaxImm64(b, module_base + kGlobalVmStackPtrRva);
-    b.insert(b.end(), {
-        0x8b, 0x08                                      // mov ecx,[rax]
-    });
-    AppendAbsJmp(b, target + 0x10);
-    return b;
-}
-
-void AppendReadVmArgToState(std::vector<uint8_t>& b, uint64_t module_base, uint64_t remote_state,
-                            uint8_t vm_offset, uint8_t state_offset) {
-    AppendMovRdxImm64(b, remote_state);
-    b.insert(b.end(), {
-        0x8b, 0x4a, 0x18,        // mov ecx,[rdx+0x18] ; saved DAT_1420395C8
-        0x83, 0xc1, vm_offset    // add ecx,vm_offset
-    });
-    AppendMovRaxImm64(b, module_base + 0x3f0a0);
-    b.insert(b.end(), {
-        0xff, 0xd0,              // call rax ; FUN_14003F0A0
-        0x31, 0xc9,              // xor ecx,ecx
-        0x48, 0x85, 0xc0,        // test rax,rax
-        0x74, 0x02,              // jz +2
-        0x8b, 0x08               // mov ecx,[rax]
-    });
-    AppendMovRdxImm64(b, remote_state);
-    b.insert(b.end(), {
-        0x89, 0x4a, state_offset // mov [rdx+state_offset],ecx
-    });
-}
-
-std::vector<uint8_t> MakeDirectFontLoadStub(uint64_t module_base, uint64_t remote_state) {
-    const uint64_t vm_stack_ptr = module_base + kGlobalVmStackPtrRva;
-    const uint64_t load_command = module_base + 0x4ab00;
-    std::vector<uint8_t> b = {
-        0x48, 0x83, 0xec, 0x48   // sub rsp,0x48 ; shadow space + alignment
-    };
-
-    AppendMovRdxImm64(b, remote_state);
-    b.insert(b.end(), {
-        0xc7, 0x42, 0x20, 0x01, 0x00, 0x00, 0x00 // mov dword ptr [rdx+0x20],1
-    });
-    AppendMovRaxImm64(b, vm_stack_ptr);
-    b.insert(b.end(), {
-        0x8b, 0x08,              // mov ecx,[rax] ; DAT_1420395C8
-    });
-    AppendMovRdxImm64(b, remote_state);
-    b.insert(b.end(), {
-        0x89, 0x4a, 0x18         // mov [rdx+0x18],ecx
-    });
-
-    AppendReadVmArgToState(b, module_base, remote_state, 0x04, 0x08);
-    AppendReadVmArgToState(b, module_base, remote_state, 0x08, 0x0c);
-    AppendReadVmArgToState(b, module_base, remote_state, 0x0c, 0x10);
-    AppendReadVmArgToState(b, module_base, remote_state, 0x14, 0x14);
-
-    AppendMovR10Imm64(b, remote_state);
-    b.insert(b.end(), {
-        0x45, 0x8b, 0x42, 0x08,  // mov r8d,[r10+0x08]
-        0x45, 0x8b, 0x4a, 0x0c,  // mov r9d,[r10+0x0c]
-        0x41, 0x8b, 0x42, 0x10,  // mov eax,[r10+0x10]
-        0x89, 0x44, 0x24, 0x20,  // mov [rsp+0x20],eax
-        0x41, 0x8b, 0x42, 0x04,  // mov eax,[r10+0x04] ; filename handle
-        0x89, 0x44, 0x24, 0x28,  // mov [rsp+0x28],eax
-        0x41, 0x8b, 0x42, 0x14,  // mov eax,[r10+0x14]
-        0x89, 0x44, 0x24, 0x30,  // mov [rsp+0x30],eax
-        0xba, 0x05, 0x00, 0x00, 0x00, // mov edx,5
-        0xb9, 0xac, 0x10, 0x67, 0x00  // mov ecx,0x6710AC
-    });
-    AppendMovRaxImm64(b, load_command);
-    b.insert(b.end(), {
-        0xff, 0xd0               // call rax
-    });
-
-    AppendMovRdxImm64(b, remote_state);
-    b.insert(b.end(), {
-        0x89, 0x02,              // mov [rdx],eax
-        0x89, 0x42, 0x1c,        // mov [rdx+0x1c],eax
-        0xc7, 0x42, 0x20, 0x02, 0x00, 0x00, 0x00, // mov dword ptr [rdx+0x20],2
-        0x8b, 0x4a, 0x18         // mov ecx,[rdx+0x18]
-    });
-    AppendMovRaxImm64(b, vm_stack_ptr);
-    b.insert(b.end(), {
-        0x89, 0x08               // mov [rax],ecx ; restore DAT_1420395C8
-    });
-    AppendMovRdxImm64(b, remote_state);
-    b.insert(b.end(), {
-        0x8b, 0x02,              // mov eax,[rdx]
-        0x48, 0x83, 0xc4, 0x48,  // add rsp,0x48
-        0xc3                     // ret
-    });
     return b;
 }
 
@@ -552,57 +378,103 @@ std::vector<uint8_t> MakeFontLoaderHookStub(uint64_t module_base, uint64_t remot
     const uint64_t font_struct_ptr_global = module_base + kGlobalFontStructPtrRva;
     const uint64_t font_struct_handle_global = module_base + kGlobalFontStructHandleRva;
     const uint64_t epilogue_continue = module_base + 0x156e10f;
+    const uint32_t status_off = static_cast<uint32_t>(offsetof(RemoteStateLocal, direct_status));
+    const uint32_t saved_vm_stack_off = static_cast<uint32_t>(offsetof(RemoteStateLocal, saved_vm_stack));
+    const uint32_t arg0_off = static_cast<uint32_t>(offsetof(RemoteStateLocal, direct_arg0));
+    const uint32_t arg1_off = static_cast<uint32_t>(offsetof(RemoteStateLocal, direct_arg1));
+    const uint32_t arg2_off = static_cast<uint32_t>(offsetof(RemoteStateLocal, direct_arg2));
+    const uint32_t arg3_off = static_cast<uint32_t>(offsetof(RemoteStateLocal, direct_arg3));
+    const uint32_t names_off = static_cast<uint32_t>(offsetof(RemoteStateLocal, extra_jafont_names));
     std::vector<uint8_t> b;
     AppendMovRaxImm64(b, remote_state);
-    b.insert(b.end(), {0x83, 0x38, 0x00});              // cmp dword ptr [rax],0
-    size_t jne_skip_load = AppendJcc32(b, 0x85);
-    AppendMovRdxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0x83, 0x78, static_cast<uint8_t>(status_off), 0x02 // cmp dword ptr [rax+status],2
+    });
+    size_t je_skip_loaded = AppendJcc32(b, 0x84);
+    b.insert(b.end(), {
+        0xc7, 0x40, static_cast<uint8_t>(status_off), 0x01, 0x00, 0x00, 0x00, // status=1
+        0x89, 0x78, static_cast<uint8_t>(arg0_off),  // mov [rax+arg0],edi
+        0x89, 0x70, static_cast<uint8_t>(arg1_off),  // mov [rax+arg1],esi
+        0x89, 0x68, static_cast<uint8_t>(arg2_off),  // mov [rax+arg2],ebp
+        0x89, 0x58, static_cast<uint8_t>(arg3_off)   // mov [rax+arg3],ebx
+    });
     AppendMovRaxImm64(b, font_struct_ptr_global);
     b.insert(b.end(), {
-        0x48, 0x8b, 0x00,                                // mov rax,[rax]
+        0x48, 0x8b, 0x00,                                // mov rax,[rax] ; font struct ptr
         0x48, 0x85, 0xc0                                 // test rax,rax
     });
     size_t jz_skip_no_struct = AppendJcc32(b, 0x84);
-    AppendMovR11Imm64(b, font_struct_handle_global);
+    AppendMovRdxImm64(b, font_struct_handle_global);
     b.insert(b.end(), {
-        0x45, 0x8b, 0x1b,                                // mov r11d,[r11]
-        0x45, 0x85, 0xdb                                 // test r11d,r11d
+        0x8b, 0x12,                                      // mov edx,[rdx] ; font struct handle
+        0x85, 0xd2                                       // test edx,edx
     });
     size_t jz_skip_no_handle = AppendJcc32(b, 0x84);
-    b.insert(b.end(), {
-        0x48, 0x8d, 0xb2, 0x40, 0x00, 0x00, 0x00,        // lea rsi,[rdx+0x40]
-        0x48, 0x8d, 0xb8, 0xb8, 0x00, 0x00, 0x00,        // lea rdi,[rax+0xB8]
-        0xb9, 0x80, 0x00, 0x00, 0x00,                    // mov ecx,0x80
-        0xf3, 0xa4,                                      // rep movsb
-        0x41, 0x81, 0xc3, 0xb8, 0x00, 0x00, 0x00,        // add r11d,0xB8
-        0x44, 0x89, 0x5a, 0x04                           // mov [rdx+4],r11d
-    });
     AppendMovRaxImm64(b, vm_stack_ptr);
     b.insert(b.end(), {
-        0x8b, 0x08,                                      // mov ecx,[rax]
-        0x89, 0x4a, 0x18                                 // mov [rdx+0x18],ecx
+        0x8b, 0x08                                       // mov ecx,[rax]
     });
     AppendMovRaxImm64(b, remote_state);
     b.insert(b.end(), {
-        0x44, 0x8b, 0xce,                                // mov r9d,esi
-        0x44, 0x8b, 0xc7,                                // mov r8d,edi
-        0xba, 0x05, 0x00, 0x00, 0x00,                    // mov edx,5
-        0xb9, 0xac, 0x10, 0x67, 0x00,                    // mov ecx,0x6710ac
-        0x89, 0x6c, 0x24, 0x20,                          // mov [rsp+0x20],ebp
-        0x8b, 0x40, 0x04,                                // mov eax,[rax+4]
-        0x89, 0x44, 0x24, 0x28,                          // mov [rsp+0x28],eax
-        0x89, 0x5c, 0x24, 0x30                           // mov [rsp+0x30],ebx
+        0x89, 0x48, static_cast<uint8_t>(saved_vm_stack_off) // mov [rax+saved_vm_stack],ecx
     });
-    AppendMovR10Imm64(b, load_command);
-    b.insert(b.end(), {0x41, 0xff, 0xd2});               // call r10
+
+    for (size_t i = 0; i < kExtraJafontPageCount; ++i) {
+        const uint32_t handle_off =
+            static_cast<uint32_t>(offsetof(RemoteStateLocal, extra_jafont_handles)) +
+            static_cast<uint32_t>(i * sizeof(uint32_t));
+        const uint64_t source_name = remote_state + names_off + i * kNativeNameSlotSize;
+        AppendMovRsiImm64(b, source_name);
+        AppendMovRdiImm64(b, font_struct_ptr_global);
+        b.insert(b.end(), {
+            0x48, 0x8b, 0x3f,                              // mov rdi,[rdi]
+            0x48, 0x81, 0xc7, 0xb8, 0x00, 0x00, 0x00,      // add rdi,0xB8
+            0xb9, 0x14, 0x00, 0x00, 0x00,                  // mov ecx,0x14
+            0xf3, 0xa4                                     // rep movsb
+        });
+
+        AppendMovRaxImm64(b, remote_state);
+        b.insert(b.end(), {
+            0x8b, 0x40, static_cast<uint8_t>(arg2_off),    // mov eax,[rax+arg2]
+            0x89, 0x44, 0x24, 0x20                         // mov [rsp+0x20],eax
+        });
+        AppendMovRdxImm64(b, font_struct_handle_global);
+        b.insert(b.end(), {
+            0x8b, 0x02,                                    // mov eax,[rdx]
+            0x05, 0xb8, 0x00, 0x00, 0x00,                  // add eax,0xB8
+            0x89, 0x44, 0x24, 0x28                         // mov [rsp+0x28],eax
+        });
+        AppendMovRaxImm64(b, remote_state);
+        b.insert(b.end(), {
+            0x8b, 0x40, static_cast<uint8_t>(arg3_off),    // mov eax,[rax+arg3]
+            0x89, 0x44, 0x24, 0x30                         // mov [rsp+0x30],eax
+        });
+        AppendMovRaxImm64(b, remote_state);
+        b.insert(b.end(), {
+            0x44, 0x8b, 0x48, static_cast<uint8_t>(arg1_off), // mov r9d,[rax+arg1]
+            0x44, 0x8b, 0x40, static_cast<uint8_t>(arg0_off), // mov r8d,[rax+arg0]
+            0xba, 0x05, 0x00, 0x00, 0x00,                    // mov edx,5
+            0xb9, 0xac, 0x10, 0x67, 0x00                    // mov ecx,0x6710ac
+        });
+        AppendMovR10Imm64(b, load_command);
+        b.insert(b.end(), {0x41, 0xff, 0xd2});             // call r10
+        AppendMovRdxImm64(b, remote_state);
+        b.insert(b.end(), {
+            0x89, 0x82                                      // mov [rdx+handle_off],eax
+        });
+        AppendU32(b, handle_off);
+    }
+
     AppendMovRdxImm64(b, remote_state);
     b.insert(b.end(), {
-        0x89, 0x02,                                      // mov [rdx],eax
-        0x89, 0x42, 0x1c,                                // mov [rdx+0x1c],eax
-        0x8b, 0x4a, 0x18                                 // mov ecx,[rdx+0x18]
+        0x8b, 0x4a, static_cast<uint8_t>(saved_vm_stack_off) // mov ecx,[rdx+saved_vm_stack]
     });
     AppendMovRaxImm64(b, vm_stack_ptr);
     b.insert(b.end(), {0x89, 0x08});                     // mov [rax],ecx
+    AppendMovRaxImm64(b, remote_state);
+    b.insert(b.end(), {
+        0xc7, 0x40, static_cast<uint8_t>(status_off), 0x02, 0x00, 0x00, 0x00 // status=2
+    });
     size_t skip_load = b.size();
     b.insert(b.end(), {
         0x48, 0x8b, 0x6c, 0x24, 0x58,                    // mov rbp,[rsp+0x58]
@@ -610,7 +482,7 @@ std::vector<uint8_t> MakeFontLoaderHookStub(uint64_t module_base, uint64_t remot
         0x48, 0x8b, 0x7c, 0x24, 0x40                     // mov rdi,[rsp+0x40]
     });
     AppendAbsJmp(b, epilogue_continue);
-    PatchJcc32(b, jne_skip_load, skip_load);
+    PatchJcc32(b, je_skip_loaded, skip_load);
     PatchJcc32(b, jz_skip_no_struct, skip_load);
     PatchJcc32(b, jz_skip_no_handle, skip_load);
     return b;
@@ -664,33 +536,12 @@ std::vector<PatchSite> Sites() {
             PatchKind::GlyphRenderer
         },
         {
-            "field_wrapper_c021_overlay_smoke_test",
-            0x1570730,
-            {0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x48,0x83,0xec,0x50,
-             0x80,0x3d,0x19,0xa7,0xb0,0x00,0x00,0x0f,0x85,0x03,0x02,0x00,0x00},
-            {0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x48,0x83,0xec,0x50,
-             0x80,0x3d,0x19,0xa7,0xb0,0x00,0x00},
-            19,
-            PatchKind::FieldWrapperOverlay
-        },
-        {
-            "field_glyph_helper_c021_overlay_smoke_test",
-            0x106ccc0,
-            {0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x8b,0x0d,
-             0xf8,0xc8,0xfc,0x00,0x8b,0x1d,0xf6,0xc8,0xfc,0x00,0x83,0xc1,
-             0xfc,0x89,0x0d,0xe9,0xc8,0xfc,0x00},
-            {0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x8b,0x0d,
-             0xf8,0xc8,0xfc,0x00},
-            16,
-            PatchKind::FieldGlyphOverlay
-        },
-        {
-            "font_loader_korean_c0_extra_page",
+            "menu_jafont_7_19_loader_hook",
             0x156e100,
             {0x48,0x8b,0x6c,0x24,0x58,0x48,0x8b,0x74,0x24,0x60,0x48,0x8b,0x7c,0x24,0x40},
             {0x48,0x8b,0x6c,0x24,0x58,0x48,0x8b,0x74,0x24,0x60,0x48,0x8b,0x7c,0x24,0x40},
             15,
-            PatchKind::FontLoaderHook
+            PatchKind::ExtraJafontLoaderHook
         }
     };
 }
@@ -853,124 +704,17 @@ bool WaitForRuntimeBytes(HANDLE process, uint64_t module_base, const std::vector
     }
 }
 
-bool ValidateFontFile(const std::wstring& path) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        Log(L"abort: Korean font resource not found: " + path);
-        return false;
-    }
-    std::vector<uint8_t> head(68, 0);
-    f.read(reinterpret_cast<char*>(head.data()), static_cast<std::streamsize>(head.size()));
-    std::streamsize got = f.gcount();
-    f.seekg(0, std::ios::end);
-    std::streamoff size = f.tellg();
-    if (size <= 0 || got < 68) {
-        Log(L"abort: Korean font resource is too small: " + path);
-        return false;
-    }
-    auto u32 = [&head](size_t index) -> uint32_t {
-        size_t i = index * 4;
-        return static_cast<uint32_t>(head[i]) |
-               (static_cast<uint32_t>(head[i + 1]) << 8) |
-               (static_cast<uint32_t>(head[i + 2]) << 16) |
-               (static_cast<uint32_t>(head[i + 3]) << 24);
-    };
-    Log(L"Korean font file: " + path);
-    Log(L"Korean font file size: " + std::to_wstring(static_cast<long long>(size)));
-    Log(L"Korean font TEX header probe: magic=" + std::to_wstring(u32(0)) +
-        L" width=" + std::to_wstring(u32(15)) + L" height=" + std::to_wstring(u32(16)));
-    if (u32(0) != 1 || u32(15) != 1024 || u32(16) != 1024) {
-        Log(L"abort: Korean font resource header does not match expected 1024x1024 TEX page");
-        return false;
-    }
-    return true;
-}
-
-bool StageFontBesideGame(HANDLE process, const Options& opt, std::wstring* staged_path) {
-    std::wstring process_path;
-    if (!GetProcessImagePath(process, &process_path)) {
-        Log(L"abort: could not query target process path error=" + std::to_wstring(GetLastError()));
-        return false;
-    }
-    std::wstring game_dir = ParentDirectory(process_path);
-    std::wstring target = JoinPath(game_dir, WidenAscii(opt.native_font_name));
-    std::wstring source_full = FullPath(opt.font_path);
-    std::wstring target_full = FullPath(target);
-
-    Log(L"target game executable: " + process_path);
-    Log(L"target game directory: " + game_dir);
-    Log(L"Korean font staging target: " + target_full);
-
-    if (_wcsicmp(source_full.c_str(), target_full.c_str()) != 0) {
-        if (FileExists(target_full)) {
-            Log(L"Korean font staging target already exists; validating without overwrite");
-        } else {
-            if (!CopyFileW(source_full.c_str(), target_full.c_str(), TRUE)) {
-                Log(L"abort: could not copy Korean font resource beside game error=" +
-                    std::to_wstring(GetLastError()));
-                return false;
-            }
-            Log(L"copied Korean font resource beside game");
-        }
-    }
-    if (!ValidateFontFile(target_full)) {
-        Log(L"abort: staged Korean font resource is invalid");
-        return false;
-    }
-
-    std::wstring source_tex = ReplaceExtension(source_full, L".tex");
-    std::wstring target_tex = ReplaceExtension(target_full, L".tex");
-    if (FileExists(source_tex) && _wcsicmp(source_tex.c_str(), target_tex.c_str()) != 0) {
-        if (FileExists(target_tex)) {
-            Log(L"Korean TEX alias already exists beside game; leaving it in place");
-        } else if (CopyFileW(source_tex.c_str(), target_tex.c_str(), TRUE)) {
-            Log(L"copied Korean TEX alias beside game: " + target_tex);
-        } else {
-            Log(L"warning: could not copy Korean TEX alias beside game error=" +
-                std::to_wstring(GetLastError()));
-        }
-    }
-    *staged_path = target_full;
-    return true;
-}
-
-bool PrepareRemoteFontName(HANDLE process, uint64_t module_base, const Options& opt,
-                           uint64_t* remote_state_out) {
-    if (opt.native_font_name.empty() || opt.native_font_name.size() + 1 > kFontFilenameScratchSize) {
-        Log(L"abort: native font name must be 1.." + std::to_wstring(kFontFilenameScratchSize - 1) +
-            L" ASCII bytes");
-        return false;
-    }
-    uint64_t font_struct_ptr = 0;
-    uint32_t font_struct_handle = 0;
-    if (!ReadMem(process, module_base + kGlobalFontStructPtrRva, &font_struct_ptr, sizeof(font_struct_ptr)) ||
-        !ReadMem(process, module_base + kGlobalFontStructHandleRva, &font_struct_handle, sizeof(font_struct_handle))) {
-        Log(L"abort: could not read native font globals");
-        return false;
-    }
-
-    std::vector<uint8_t> name(kFontFilenameScratchSize, 0);
-    std::copy(opt.native_font_name.begin(), opt.native_font_name.end(), name.begin());
-
+bool PrepareRemoteMenuJafontState(HANDLE process, uint64_t* remote_state_out) {
     RemoteStateLocal state{};
-    state.korean_c0_handle = 0;
-    state.filename_handle = font_struct_handle == 0 ? 0 : font_struct_handle + kFontFilenameScratchOffset;
-    std::copy(opt.native_font_name.begin(), opt.native_font_name.end(), state.native_name);
+    for (size_t i = 0; i < kExtraJafontPageCount; ++i) {
+        const unsigned page = kFirstExtraJafontPage + static_cast<unsigned>(i);
+        std::snprintf(state.extra_jafont_names[i], kNativeNameSlotSize, "jafont_%u.tim", page);
+    }
+
     LPVOID remote_state = VirtualAllocEx(process, nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!remote_state) {
         Log(L"abort: VirtualAllocEx remote state failed error=" + std::to_wstring(GetLastError()));
         return false;
-    }
-    if (font_struct_ptr != 0 && font_struct_handle != 0) {
-        uint64_t remote_name_ptr = font_struct_ptr + kFontFilenameScratchOffset;
-        if (!WriteMem(process, remote_name_ptr, name.data(), name.size())) {
-            Log(L"abort: could not write Korean font filename scratch slot");
-            return false;
-        }
-        Log(L"Korean filename scratch ptr: " + Hex64(remote_name_ptr));
-        Log(L"Korean filename scratch handle: " + Hex64(state.filename_handle));
-    } else {
-        Log(L"native font globals are not initialized yet; loader hook will stage the filename at runtime");
     }
     if (!WriteMem(process, reinterpret_cast<uint64_t>(remote_state), &state, sizeof(state))) {
         Log(L"abort: could not write remote state");
@@ -978,15 +722,12 @@ bool PrepareRemoteFontName(HANDLE process, uint64_t module_base, const Options& 
     }
 
     *remote_state_out = reinterpret_cast<uint64_t>(remote_state);
-    Log(L"native font struct ptr: " + Hex64(font_struct_ptr));
-    Log(L"native font struct handle: " + Hex64(font_struct_handle));
-    Log(L"Korean native filename: " + WidenAscii(opt.native_font_name));
     Log(L"remote patch state: " + Hex64(*remote_state_out));
+    Log(L"extra menu jafont logical names: jafont_7.tim .. jafont_19.tim");
     return true;
 }
 
-std::vector<uint8_t> MakeStub(const PatchSite& site, uint64_t module_base, uint64_t remote_state,
-                              uint64_t trampoline = 0) {
+std::vector<uint8_t> MakeStub(const PatchSite& site, uint64_t module_base, uint64_t remote_state) {
     switch (site.kind) {
     case PatchKind::CommonRender:
         return MakeCommonRenderStub(module_base);
@@ -998,10 +739,7 @@ std::vector<uint8_t> MakeStub(const PatchSite& site, uint64_t module_base, uint6
         return MakeFieldLayoutStub(module_base);
     case PatchKind::GlyphRenderer:
         return MakeGlyphRendererStub(module_base, remote_state);
-    case PatchKind::FieldWrapperOverlay:
-    case PatchKind::FieldGlyphOverlay:
-        return MakeFieldWrapperOverlayStub(module_base, trampoline);
-    case PatchKind::FontLoaderHook:
+    case PatchKind::ExtraJafontLoaderHook:
         return MakeFontLoaderHookStub(module_base, remote_state);
     }
     return {};
@@ -1017,37 +755,7 @@ bool InstallOneSite(HANDLE process, uint64_t module_base, const PatchSite& site,
         return false;
     }
 
-    uint64_t trampoline_addr = 0;
-    if (site.kind == PatchKind::FieldWrapperOverlay || site.kind == PatchKind::FieldGlyphOverlay) {
-        std::vector<uint8_t> trampoline;
-        if (site.kind == PatchKind::FieldGlyphOverlay) {
-            trampoline = MakeFieldGlyphOverlayTrampoline(module_base, target);
-        } else {
-            trampoline = site.overwrite_original;
-            AppendAbsJmp(trampoline, target + site.overwrite_len);
-        }
-        LPVOID remote_trampoline =
-            VirtualAllocEx(process, nullptr, trampoline.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        if (!remote_trampoline) {
-            Log(L"VirtualAllocEx trampoline failed for " + Utf8ish(site.id) +
-                L" error=" + std::to_wstring(GetLastError()));
-            return false;
-        }
-        trampoline_addr = reinterpret_cast<uint64_t>(remote_trampoline);
-        if (!WriteMem(process, trampoline_addr, trampoline)) {
-            Log(L"trampoline write failed for " + Utf8ish(site.id));
-            return false;
-        }
-        DWORD old_protect = 0;
-        if (!VirtualProtectEx(process, remote_trampoline, trampoline.size(), PAGE_EXECUTE_READ, &old_protect)) {
-            Log(L"VirtualProtectEx trampoline failed for " + Utf8ish(site.id) +
-                L" error=" + std::to_wstring(GetLastError()));
-            return false;
-        }
-        FlushInstructionCache(process, remote_trampoline, trampoline.size());
-    }
-
-    std::vector<uint8_t> stub = MakeStub(site, module_base, remote_state, trampoline_addr);
+    std::vector<uint8_t> stub = MakeStub(site, module_base, remote_state);
     LPVOID remote_stub = VirtualAllocEx(process, nullptr, stub.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!remote_stub) {
         Log(L"VirtualAllocEx stub failed for " + Utf8ish(site.id) + L" error=" + std::to_wstring(GetLastError()));
@@ -1070,7 +778,6 @@ bool InstallOneSite(HANDLE process, uint64_t module_base, const PatchSite& site,
     Log(L"install " + Utf8ish(site.id));
     Log(L"  target=" + Hex64(target) + L" rva=" + Hex64(site.rva));
     Log(L"  original overwrite bytes=" + HexBytes(site.overwrite_original));
-    if (trampoline_addr != 0) Log(L"  trampoline=" + Hex64(trampoline_addr));
     Log(L"  stub=" + Hex64(stub_addr) + L" stub bytes=" + HexBytes(stub));
     Log(L"  detour bytes=" + HexBytes(detour));
 
@@ -1109,14 +816,25 @@ bool RestoreSites(HANDLE process, DWORD pid, uint64_t module_base, bool suspend_
     return all_ok;
 }
 
-bool WaitForKoreanHandle(HANDLE process, uint64_t remote_state, DWORD wait_ms, uint32_t* handle_out) {
+bool WaitForExtraJafontHandles(HANDLE process, uint64_t remote_state, DWORD wait_ms) {
     const DWORD step_ms = 500;
     DWORD waited = 0;
     while (waited <= wait_ms) {
         RemoteStateLocal state{};
-        if (ReadMem(process, remote_state, &state, sizeof(state)) && state.korean_c0_handle != 0) {
-            *handle_out = state.korean_c0_handle;
-            return true;
+        if (ReadMem(process, remote_state, &state, sizeof(state)) && state.direct_status == 2) {
+            bool all_ready = true;
+            std::wstring summary = L"extra menu jafont handles:";
+            for (size_t i = 0; i < kExtraJafontPageCount; ++i) {
+                const uint32_t lead = kFirstKoreanLead + static_cast<uint32_t>(i);
+                const uint32_t page = kFirstExtraJafontPage + static_cast<uint32_t>(i);
+                const uint32_t handle = state.extra_jafont_handles[i];
+                if (handle == 0) all_ready = false;
+                summary += L" lead=" + Hex64(lead);
+                summary += L"/jafont_" + std::to_wstring(page);
+                summary += L"=" + Hex64(handle);
+            }
+            Log(summary);
+            return all_ready;
         }
         Sleep(step_ms);
         waited += step_ms;
@@ -1124,137 +842,41 @@ bool WaitForKoreanHandle(HANDLE process, uint64_t remote_state, DWORD wait_ms, u
     return false;
 }
 
-bool JapaneseFontHandlesReady(HANDLE process, uint64_t module_base) {
-    uint64_t font_struct_ptr = 0;
-    if (!ReadMem(process, module_base + kGlobalFontStructPtrRva, &font_struct_ptr, sizeof(font_struct_ptr)) ||
-        font_struct_ptr == 0) {
-        Log(L"Japanese font handles are not ready yet: font struct pointer is zero");
-        return false;
-    }
-    const uint32_t offsets[] = {0x10, 0x24, 0x38, 0x4c, 0x60, 0x74};
-    bool all_ready = true;
-    std::wstring summary = L"Japanese font handles:";
-    for (uint32_t offset : offsets) {
-        uint32_t handle = 0;
-        if (!ReadMem(process, font_struct_ptr + offset, &handle, sizeof(handle))) {
-            all_ready = false;
-            summary += L" +" + Hex64(offset) + L"=<read failed>";
-            continue;
-        }
-        if (handle == 0) all_ready = false;
-        summary += L" +" + Hex64(offset) + L"=" + Hex64(handle);
-    }
-    Log(summary);
-    return all_ready;
-}
-
-bool TryDirectKoreanLoad(HANDLE process, uint64_t module_base, uint64_t remote_state, uint32_t* handle_out) {
-    std::vector<uint8_t> stub = MakeDirectFontLoadStub(module_base, remote_state);
-    LPVOID remote_stub = VirtualAllocEx(process, nullptr, stub.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if (!remote_stub) {
-        Log(L"direct Korean load skipped: VirtualAllocEx failed error=" + std::to_wstring(GetLastError()));
-        return false;
-    }
-    uint64_t stub_addr = reinterpret_cast<uint64_t>(remote_stub);
-    if (!WriteMem(process, stub_addr, stub)) {
-        Log(L"direct Korean load skipped: stub write failed error=" + std::to_wstring(GetLastError()));
-        return false;
-    }
-    DWORD old_protect = 0;
-    if (!VirtualProtectEx(process, remote_stub, stub.size(), PAGE_EXECUTE_READ, &old_protect)) {
-        Log(L"direct Korean load skipped: VirtualProtectEx stub failed error=" +
-            std::to_wstring(GetLastError()));
-        return false;
-    }
-    FlushInstructionCache(process, remote_stub, stub.size());
-
-    Log(L"attempt direct Korean C0 page load via current VM stack args");
-    Log(L"  direct stub=" + Hex64(stub_addr) + L" stub bytes=" + HexBytes(stub));
-
-    HANDLE thread = CreateRemoteThread(process, nullptr, 0,
-                                       reinterpret_cast<LPTHREAD_START_ROUTINE>(remote_stub),
-                                       nullptr, 0, nullptr);
-    if (!thread) {
-        Log(L"direct Korean load skipped: CreateRemoteThread failed error=" +
-            std::to_wstring(GetLastError()));
-        return false;
-    }
-    DWORD wait = WaitForSingleObject(thread, 10000);
-    DWORD exit_code = 0;
-    GetExitCodeThread(thread, &exit_code);
-    CloseHandle(thread);
-    if (wait != WAIT_OBJECT_0) {
-        Log(L"direct Korean load did not return within 10000 ms; leaving fallback loader hook path");
-        return false;
-    }
-
-    RemoteStateLocal state{};
-    if (!ReadMem(process, remote_state, &state, sizeof(state))) {
-        Log(L"direct Korean load finished, but remote state read failed");
-        return false;
-    }
-    Log(L"direct Korean load VM args: saved_sp=" + Hex64(state.saved_vm_stack) +
-        L" arg0=" + Hex64(state.direct_arg0) +
-        L" arg1=" + Hex64(state.direct_arg1) +
-        L" arg2=" + Hex64(state.direct_arg2) +
-        L" arg3=" + Hex64(state.direct_arg3));
-    Log(L"direct Korean load result: eax=" + Hex64(exit_code) +
-        L" stored_handle=" + Hex64(state.korean_c0_handle) +
-        L" status=" + std::to_wstring(state.direct_status));
-    if (state.korean_c0_handle == 0) {
-        return false;
-    }
-    *handle_out = state.korean_c0_handle;
-    return true;
-}
-
 bool Install(HANDLE process, DWORD pid, uint64_t module_base, const Options& opt) {
     std::vector<PatchSite> sites = Sites();
     uint64_t remote_state = 0;
-    if (!PrepareRemoteFontName(process, module_base, opt, &remote_state)) {
+    if (!PrepareRemoteMenuJafontState(process, &remote_state)) {
         return false;
     }
 
-    const PatchSite* loader = FindSite(PatchKind::FontLoaderHook, sites);
+    const PatchSite* loader = FindSite(PatchKind::ExtraJafontLoaderHook, sites);
     if (!loader) return false;
 
-    uint32_t korean_handle = 0;
-    bool loader_installed = false;
-    bool japanese_handles_ready = JapaneseFontHandlesReady(process, module_base);
-    if (japanese_handles_ready) {
-        TryDirectKoreanLoad(process, module_base, remote_state, &korean_handle);
-    } else {
-        Log(L"direct Korean C0 page load skipped because Japanese font handles are not fully loaded yet");
-    }
-    if (korean_handle == 0) {
-        Log(L"direct Korean C0 page load did not produce a handle; installing loader hook fallback");
-        {
-            SuspendedThreads suspended(pid, opt.suspend_threads);
-            if (!InstallOneSite(process, module_base, *loader, remote_state)) {
-                return false;
-            }
-            loader_installed = true;
-        }
-
-        Log(L"waiting for native font loader to create Korean C0 page handle, wait_ms=" +
-            std::to_wstring(opt.wait_ms));
-        if (!WaitForKoreanHandle(process, remote_state, opt.wait_ms, &korean_handle)) {
-            Log(L"abort: Korean C0 page handle was not created before timeout");
-            RestoreSites(process, pid, module_base, opt.suspend_threads, {*loader});
+    {
+        SuspendedThreads suspended(pid, opt.suspend_threads);
+        if (!InstallOneSite(process, module_base, *loader, remote_state)) {
             return false;
         }
     }
-    Log(L"Korean C0 page native handle: " + Hex64(korean_handle));
+
+    Log(L"waiting for native loader to create menu_ja.lgp jafont_7..19 handles, wait_ms=" +
+        std::to_wstring(opt.wait_ms));
+    if (!WaitForExtraJafontHandles(process, remote_state, opt.wait_ms)) {
+        Log(L"abort: one or more extra menu jafont handles were not created before timeout");
+        Log(L"run the patcher before launching FFVII.exe, and confirm jafont_7.tex..jafont_19.tex are inside menu_ja.lgp");
+        RestoreSites(process, pid, module_base, opt.suspend_threads, {*loader});
+        return false;
+    }
 
     std::vector<PatchSite> text_sites;
     for (const auto& site : sites) {
-        if (site.kind != PatchKind::FontLoaderHook) text_sites.push_back(site);
+        if (site.kind != PatchKind::ExtraJafontLoaderHook) text_sites.push_back(site);
     }
     Log(L"waiting for runtime-decrypted scanner/renderer signatures, wait_ms=" +
         std::to_wstring(opt.wait_ms));
     if (!WaitForRuntimeBytes(process, module_base, text_sites, opt.wait_ms)) {
         Log(L"abort: scanner/renderer runtime signatures did not match before timeout");
-        if (loader_installed) RestoreSites(process, pid, module_base, opt.suspend_threads, {*loader});
+        RestoreSites(process, pid, module_base, opt.suspend_threads, {*loader});
         return false;
     }
     Log(L"scanner/renderer runtime signatures validated");
@@ -1264,7 +886,7 @@ bool Install(HANDLE process, DWORD pid, uint64_t module_base, const Options& opt
     {
         SuspendedThreads suspended(pid, opt.suspend_threads);
         for (const auto& site : sites) {
-            if (site.kind == PatchKind::FontLoaderHook) continue;
+            if (site.kind == PatchKind::ExtraJafontLoaderHook) continue;
             if (!InstallOneSite(process, module_base, site, remote_state)) {
                 all_ok = false;
                 break;
@@ -1284,30 +906,16 @@ bool Install(HANDLE process, DWORD pid, uint64_t module_base, const Options& opt
 void PrintUsage() {
     std::wcout
         << L"usage: c0_poc_patcher.exe install|restore [--pid N] [--process FFVII.exe]\\n"
-        << L"                              [--font path] [--native-font-name korean_c0_page.tim]\\n"
         << L"                              [--wait-ms N] [--log path] [--no-suspend]\\n";
 }
 
 Options ParseArgs(int argc, wchar_t** argv) {
     Options opt;
-    opt.font_path = DefaultFontPath();
     if (argc >= 2) opt.action = argv[1];
     for (int i = 2; i < argc; ++i) {
         std::wstring a = argv[i];
         if (a == L"--pid" && i + 1 < argc) opt.pid = ParseU32(argv[++i]);
         else if (a == L"--process" && i + 1 < argc) opt.process_name = argv[++i];
-        else if (a == L"--font" && i + 1 < argc) opt.font_path = argv[++i];
-        else if (a == L"--native-font-name" && i + 1 < argc) {
-            std::wstring w = argv[++i];
-            opt.native_font_name.clear();
-            for (wchar_t ch : w) {
-                if (ch > 0x7f) {
-                    PrintUsage();
-                    ExitProcess(2);
-                }
-                opt.native_font_name.push_back(static_cast<char>(ch));
-            }
-        }
         else if (a == L"--wait-ms" && i + 1 < argc) opt.wait_ms = ParseU32(argv[++i]);
         else if (a == L"--log" && i + 1 < argc) opt.log_path = argv[++i];
         else if (a == L"--no-suspend") opt.suspend_threads = false;
@@ -1324,11 +932,7 @@ Options ParseArgs(int argc, wchar_t** argv) {
 int wmain(int argc, wchar_t** argv) {
     Options opt = ParseArgs(argc, argv);
     g_log.open(opt.log_path.c_str(), std::ios::app);
-    Log(L"==== first Korean glyph patcher " + opt.action + L" ====");
-
-    if (_wcsicmp(opt.action.c_str(), L"install") == 0 && !ValidateFontFile(opt.font_path)) {
-        return 1;
-    }
+    Log(L"==== menu_ja jafont extension patcher " + opt.action + L" ====");
 
     DWORD pid = opt.pid ? opt.pid : WaitForProcessByName(opt.process_name, opt.wait_ms);
     if (!pid) {
@@ -1345,15 +949,6 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
-    if (_wcsicmp(opt.action.c_str(), L"install") == 0) {
-        std::wstring staged_font;
-        if (!StageFontBesideGame(process, opt, &staged_font)) {
-            CloseHandle(process);
-            return 1;
-        }
-        Log(L"staged Korean font resource: " + staged_font);
-    }
-
     uint64_t module_base = FindModuleBase(pid, opt.process_name);
     if (!module_base) {
         Log(L"module base not found for " + opt.process_name);
@@ -1365,7 +960,7 @@ int wmain(int argc, wchar_t** argv) {
     bool ok = false;
     std::vector<PatchSite> sites = Sites();
     if (_wcsicmp(opt.action.c_str(), L"install") == 0) {
-        const PatchSite* loader = FindSite(PatchKind::FontLoaderHook, sites);
+        const PatchSite* loader = FindSite(PatchKind::ExtraJafontLoaderHook, sites);
         if (!loader) {
             Log(L"abort: loader patch site is not defined");
             CloseHandle(process);
