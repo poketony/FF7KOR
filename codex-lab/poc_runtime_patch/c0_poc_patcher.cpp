@@ -1,4 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <tlhelp32.h>
 
@@ -240,7 +241,8 @@ size_t AppendJcc32(std::vector<uint8_t>& out, uint8_t second_opcode) {
 
 void PatchJcc32(std::vector<uint8_t>& out, size_t disp_pos, size_t target_pos) {
     const int64_t delta = static_cast<int64_t>(target_pos) - static_cast<int64_t>(disp_pos + 4);
-    if (delta < std::numeric_limits<int32_t>::min() || delta > std::numeric_limits<int32_t>::max()) {
+    if (delta < (std::numeric_limits<int32_t>::min)() ||
+        delta > (std::numeric_limits<int32_t>::max)()) {
         throw std::runtime_error("near conditional jump target out of range");
     }
     const uint32_t encoded = static_cast<uint32_t>(static_cast<int32_t>(delta));
