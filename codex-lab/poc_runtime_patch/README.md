@@ -82,6 +82,7 @@ The patcher:
 - waits until either path creates a Korean C0 page handle
 - waits for the scanner/renderer signatures after the Korean handle exists
 - installs scanner and renderer detours only after that handle exists
+- installs a temporary field overlay smoke-test detour that draws `C0 21` through the common glyph renderer from field render timing
 
 If the file copy fails because the Steam game folder is not writable, copy `resources/korean_font/korean_c0_page.tim` and `resources/korean_font/korean_c0_page.tex` manually into the same folder as `FFVII.exe` and rerun the patcher. If both direct loading and the loader hook return no handle before timeout, the patcher restores the loader hook and reports failure. In that case, close the game, start the patcher first, then launch the game while the patcher is already waiting.
 
@@ -100,6 +101,7 @@ Restore writes back the original overwrite bytes for all patch sites. Remote stu
 After successful install:
 
 - `C0 21` renders as the Korean glyph `가` from `korean_c0_page.tim`.
+- The field overlay smoke test intentionally draws one extra `가` at a fixed coordinate after selected field text rendering helpers. This proves the Korean page and common glyph renderer are live even before the field-specific direct text loop is fully converted.
 - The common menu/battle render and width scanners consume only exact `C0 21` for this crash-safe first POC. Other original `C0 xx` bytes continue through the original single-byte path.
 - The field scanner hooks still implement the broader C0-page path for the target `jfleve.lgp` test and should be narrowed to `txt.cpp`-validated byte pairs before enabling a full unconverted playthrough.
 - The field layout scanner consumes the same two-byte sequence and uses width `64`.

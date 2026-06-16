@@ -39,6 +39,8 @@ enum class PatchKind {
     FieldRender,
     FieldLayout,
     GlyphRenderer,
+    FieldWrapperOverlay,
+    FieldGlyphOverlay,
     FontLoaderHook,
 };
 
@@ -420,6 +422,46 @@ std::vector<uint8_t> MakeGlyphRendererStub(uint64_t module_base, uint64_t remote
     return b;
 }
 
+std::vector<uint8_t> MakeFieldWrapperOverlayStub(uint64_t module_base, uint64_t trampoline) {
+    const uint64_t glyph_renderer = module_base + 0x1571ec0;
+    std::vector<uint8_t> b = {
+        0x48, 0x83, 0xec, 0x40                         // sub rsp,0x40
+    };
+    AppendMovRaxImm64(b, trampoline);
+    b.insert(b.end(), {0xff, 0xd0});                    // call trampoline/original wrapper
+    b.insert(b.end(), {
+        0xb9, 0x38, 0x00, 0x00, 0x00,                  // mov ecx,0x38 ; x
+        0xba, 0x48, 0x00, 0x00, 0x00,                  // mov edx,0x48 ; y
+        0xb8, 0xcd, 0xcc, 0xcc, 0x3d,                  // mov eax,0.1f bits
+        0x66, 0x0f, 0x6e, 0xd0,                        // movd xmm2,eax
+        0x41, 0xb9, 0x21, 0xc0, 0x00, 0x00,            // mov r9d,0xC021
+        0xc7, 0x44, 0x24, 0x20, 0x07, 0x00, 0x00, 0x00,// mov [rsp+0x20],7
+        0xc7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00,// mov [rsp+0x28],0
+        0xc7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00 // mov [rsp+0x30],0
+    });
+    AppendMovRaxImm64(b, glyph_renderer);
+    b.insert(b.end(), {
+        0xff, 0xd0,                                    // call glyph renderer
+        0x48, 0x83, 0xc4, 0x40,                        // add rsp,0x40
+        0xc3                                           // ret
+    });
+    return b;
+}
+
+std::vector<uint8_t> MakeFieldGlyphOverlayTrampoline(uint64_t module_base, uint64_t target) {
+    std::vector<uint8_t> b = {
+        0x48, 0x89, 0x5c, 0x24, 0x08,                  // mov [rsp+8],rbx
+        0x57,                                           // push rdi
+        0x48, 0x83, 0xec, 0x20                          // sub rsp,0x20
+    };
+    AppendMovRaxImm64(b, module_base + kGlobalVmStackPtrRva);
+    b.insert(b.end(), {
+        0x8b, 0x08                                      // mov ecx,[rax]
+    });
+    AppendAbsJmp(b, target + 0x10);
+    return b;
+}
+
 void AppendReadVmArgToState(std::vector<uint8_t>& b, uint64_t module_base, uint64_t remote_state,
                             uint8_t vm_offset, uint8_t state_offset) {
     AppendMovRdxImm64(b, remote_state);
@@ -620,6 +662,27 @@ std::vector<PatchSite> Sites() {
             {0x41,0x0f,0xb7,0xc0,0x4c,0x89,0xbc,0x24,0xe0,0x00,0x00,0x00,0x3d,0xfe,0x00,0x00,0x00},
             17,
             PatchKind::GlyphRenderer
+        },
+        {
+            "field_wrapper_c021_overlay_smoke_test",
+            0x1570730,
+            {0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x48,0x83,0xec,0x50,
+             0x80,0x3d,0x19,0xa7,0xb0,0x00,0x00,0x0f,0x85,0x03,0x02,0x00,0x00},
+            {0x48,0x89,0x5c,0x24,0x18,0x55,0x56,0x57,0x48,0x83,0xec,0x50,
+             0x80,0x3d,0x19,0xa7,0xb0,0x00,0x00},
+            19,
+            PatchKind::FieldWrapperOverlay
+        },
+        {
+            "field_glyph_helper_c021_overlay_smoke_test",
+            0x106ccc0,
+            {0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x8b,0x0d,
+             0xf8,0xc8,0xfc,0x00,0x8b,0x1d,0xf6,0xc8,0xfc,0x00,0x83,0xc1,
+             0xfc,0x89,0x0d,0xe9,0xc8,0xfc,0x00},
+            {0x48,0x89,0x5c,0x24,0x08,0x57,0x48,0x83,0xec,0x20,0x8b,0x0d,
+             0xf8,0xc8,0xfc,0x00},
+            16,
+            PatchKind::FieldGlyphOverlay
         },
         {
             "font_loader_korean_c0_extra_page",
@@ -922,7 +985,8 @@ bool PrepareRemoteFontName(HANDLE process, uint64_t module_base, const Options& 
     return true;
 }
 
-std::vector<uint8_t> MakeStub(const PatchSite& site, uint64_t module_base, uint64_t remote_state) {
+std::vector<uint8_t> MakeStub(const PatchSite& site, uint64_t module_base, uint64_t remote_state,
+                              uint64_t trampoline = 0) {
     switch (site.kind) {
     case PatchKind::CommonRender:
         return MakeCommonRenderStub(module_base);
@@ -934,6 +998,9 @@ std::vector<uint8_t> MakeStub(const PatchSite& site, uint64_t module_base, uint6
         return MakeFieldLayoutStub(module_base);
     case PatchKind::GlyphRenderer:
         return MakeGlyphRendererStub(module_base, remote_state);
+    case PatchKind::FieldWrapperOverlay:
+    case PatchKind::FieldGlyphOverlay:
+        return MakeFieldWrapperOverlayStub(module_base, trampoline);
     case PatchKind::FontLoaderHook:
         return MakeFontLoaderHookStub(module_base, remote_state);
     }
@@ -950,7 +1017,37 @@ bool InstallOneSite(HANDLE process, uint64_t module_base, const PatchSite& site,
         return false;
     }
 
-    std::vector<uint8_t> stub = MakeStub(site, module_base, remote_state);
+    uint64_t trampoline_addr = 0;
+    if (site.kind == PatchKind::FieldWrapperOverlay || site.kind == PatchKind::FieldGlyphOverlay) {
+        std::vector<uint8_t> trampoline;
+        if (site.kind == PatchKind::FieldGlyphOverlay) {
+            trampoline = MakeFieldGlyphOverlayTrampoline(module_base, target);
+        } else {
+            trampoline = site.overwrite_original;
+            AppendAbsJmp(trampoline, target + site.overwrite_len);
+        }
+        LPVOID remote_trampoline =
+            VirtualAllocEx(process, nullptr, trampoline.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!remote_trampoline) {
+            Log(L"VirtualAllocEx trampoline failed for " + Utf8ish(site.id) +
+                L" error=" + std::to_wstring(GetLastError()));
+            return false;
+        }
+        trampoline_addr = reinterpret_cast<uint64_t>(remote_trampoline);
+        if (!WriteMem(process, trampoline_addr, trampoline)) {
+            Log(L"trampoline write failed for " + Utf8ish(site.id));
+            return false;
+        }
+        DWORD old_protect = 0;
+        if (!VirtualProtectEx(process, remote_trampoline, trampoline.size(), PAGE_EXECUTE_READ, &old_protect)) {
+            Log(L"VirtualProtectEx trampoline failed for " + Utf8ish(site.id) +
+                L" error=" + std::to_wstring(GetLastError()));
+            return false;
+        }
+        FlushInstructionCache(process, remote_trampoline, trampoline.size());
+    }
+
+    std::vector<uint8_t> stub = MakeStub(site, module_base, remote_state, trampoline_addr);
     LPVOID remote_stub = VirtualAllocEx(process, nullptr, stub.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!remote_stub) {
         Log(L"VirtualAllocEx stub failed for " + Utf8ish(site.id) + L" error=" + std::to_wstring(GetLastError()));
@@ -973,6 +1070,7 @@ bool InstallOneSite(HANDLE process, uint64_t module_base, const PatchSite& site,
     Log(L"install " + Utf8ish(site.id));
     Log(L"  target=" + Hex64(target) + L" rva=" + Hex64(site.rva));
     Log(L"  original overwrite bytes=" + HexBytes(site.overwrite_original));
+    if (trampoline_addr != 0) Log(L"  trampoline=" + Hex64(trampoline_addr));
     Log(L"  stub=" + Hex64(stub_addr) + L" stub bytes=" + HexBytes(stub));
     Log(L"  detour bytes=" + HexBytes(detour));
 

@@ -20,6 +20,8 @@ Implemented in `codex-lab/poc_runtime_patch/c0_poc_patcher.cpp`:
 - Patches common render scanner `FUN_1415724a0`, common width scanner `FUN_1415712b0`, field render scanner `FUN_14156e430`, and field layout scanner `FUN_1415714b0`.
 - The common menu/battle scanners are narrowed to the exact first test sequence `C0 21`; this prevents original full-width single-byte `C0` text from being consumed as Korean during startup/menu rendering.
 - The field scanner hooks still use the broader C0-page path for the `jfleve.lgp` field test. They remain a known risk for unconverted field strings and should be narrowed to `txt.cpp`-validated byte pairs after the next runtime test.
+- Runtime testing on `md1stin` Text30 showed that this field dialogue path can still bypass those scanner hooks and run the direct field text loop in `FUN_1411f7dc0`, reading `0xDC0230` text bytes and field glyph tables directly.
+- A temporary field overlay smoke-test detour was added at `FUN_141570730` and `FUN_14106ccc0`; after running the original helper, it calls `FUN_141571ec0` with glyph code `0xC021`. This is intentionally a visibility proof for the Korean page/common glyph renderer, not the final field decoder implementation.
 - Width for `C0 21` is `0x40`, matching the native default full-cell multibyte width and renderer advance.
 
 Safety behavior:
