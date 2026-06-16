@@ -57,11 +57,15 @@ Do not add `FFVII.exe`, game archives, runtime dumps, or Ghidra projects to the 
 
 Extract the artifact. Keep `resources/korean_font/korean_c0_page.tim` beside the patcher in the artifact layout.
 
-Launch FFVII first. Then run:
+Recommended timing for the current POC is to run the patcher first, then launch FFVII while it is waiting for the process. This gives the loader hook a chance to install before the native Japanese font loader runs:
 
 ```bat
 c0_poc_patcher.exe install --process FFVII.exe --wait-ms 120000 --log first_korean_glyph_patch.log
 ```
+
+After this prints `waiting for process FFVII.exe`, launch the game normally.
+
+If the game is already running, the same command is still valid. In that case the patcher first tries a direct native loader command. If the Japanese font lifecycle has already passed and direct loading returns no handle, the fallback hook may wait until timeout.
 
 The patcher:
 
@@ -70,14 +74,16 @@ The patcher:
 - copies `resources/korean_font/korean_c0_page.tim` beside the target `FFVII.exe` as `korean_c0_page.tim` if it is not already there
 - also copies the sibling `korean_c0_page.tex` alias beside the game when present, because the native resolver may map logical `.tim` names to TEX containers
 - locates the `FFVII.exe` module base
-- waits for runtime-decrypted signatures
+- waits first only for the runtime-decrypted loader signature
 - writes `korean_c0_page.tim` into confirmed unused space in the native font-name allocation
-- first attempts a direct native loader command using the current VM stack arguments, restoring `DAT_1420395C8` afterward
-- if direct loading returns no handle, installs a temporary hook at the existing native Japanese font loader
+- if the six Japanese font handles are already loaded, first attempts a direct native loader command using the current VM stack arguments, restoring `DAT_1420395C8` afterward
+- if Japanese handles are not loaded yet, or direct loading returns no handle, installs a temporary hook at the existing native Japanese font loader
+- the loader hook writes `korean_c0_page.tim` into the native font-name allocation at execution time, so it can be installed before that allocation has been initialized
 - waits until either path creates a Korean C0 page handle
+- waits for the scanner/renderer signatures after the Korean handle exists
 - installs scanner and renderer detours only after that handle exists
 
-If the file copy fails because the Steam game folder is not writable, copy `resources/korean_font/korean_c0_page.tim` and `resources/korean_font/korean_c0_page.tex` manually into the same folder as `FFVII.exe` and rerun the patcher. If both direct loading and the loader hook return no handle before timeout, the patcher restores the loader hook and reports failure. In that case, start the game again, run the patcher earlier, and stay on a screen where the menu/font resource lifecycle can run.
+If the file copy fails because the Steam game folder is not writable, copy `resources/korean_font/korean_c0_page.tim` and `resources/korean_font/korean_c0_page.tex` manually into the same folder as `FFVII.exe` and rerun the patcher. If both direct loading and the loader hook return no handle before timeout, the patcher restores the loader hook and reports failure. In that case, close the game, start the patcher first, then launch the game while the patcher is already waiting.
 
 ## Restore
 

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -59,6 +60,8 @@ struct RemoteStateLocal {
     uint32_t saved_vm_stack;
     uint32_t direct_result;
     uint32_t direct_status;
+    uint8_t reserved_to_filename[0x1c];
+    char native_name[kFontFilenameScratchSize];
 };
 
 std::wofstream g_log;
@@ -207,6 +210,12 @@ void AppendMovR10Imm64(std::vector<uint8_t>& out, uint64_t value) {
     AppendU64(out, value);
 }
 
+void AppendMovR11Imm64(std::vector<uint8_t>& out, uint64_t value) {
+    out.push_back(0x49);
+    out.push_back(0xBB);
+    AppendU64(out, value);
+}
+
 size_t AppendJcc8(std::vector<uint8_t>& out, uint8_t opcode) {
     out.push_back(opcode);
     out.push_back(0x00);
@@ -219,6 +228,25 @@ void PatchJcc8(std::vector<uint8_t>& out, size_t disp_pos, size_t target_pos) {
         throw std::runtime_error("short conditional jump target out of range");
     }
     out[disp_pos] = static_cast<uint8_t>(delta & 0xff);
+}
+
+size_t AppendJcc32(std::vector<uint8_t>& out, uint8_t second_opcode) {
+    out.push_back(0x0f);
+    out.push_back(second_opcode);
+    size_t disp_pos = out.size();
+    AppendU32(out, 0);
+    return disp_pos;
+}
+
+void PatchJcc32(std::vector<uint8_t>& out, size_t disp_pos, size_t target_pos) {
+    const int64_t delta = static_cast<int64_t>(target_pos) - static_cast<int64_t>(disp_pos + 4);
+    if (delta < std::numeric_limits<int32_t>::min() || delta > std::numeric_limits<int32_t>::max()) {
+        throw std::runtime_error("near conditional jump target out of range");
+    }
+    const uint32_t encoded = static_cast<uint32_t>(static_cast<int32_t>(delta));
+    for (int i = 0; i < 4; ++i) {
+        out[disp_pos + i] = static_cast<uint8_t>((encoded >> (i * 8)) & 0xff);
+    }
 }
 
 std::vector<uint8_t> MakeAbsDetour(uint64_t target, size_t overwrite_len) {
@@ -473,12 +501,34 @@ std::vector<uint8_t> MakeDirectFontLoadStub(uint64_t module_base, uint64_t remot
 std::vector<uint8_t> MakeFontLoaderHookStub(uint64_t module_base, uint64_t remote_state) {
     const uint64_t load_command = module_base + 0x4ab00;
     const uint64_t vm_stack_ptr = module_base + kGlobalVmStackPtrRva;
+    const uint64_t font_struct_ptr_global = module_base + kGlobalFontStructPtrRva;
+    const uint64_t font_struct_handle_global = module_base + kGlobalFontStructHandleRva;
     const uint64_t epilogue_continue = module_base + 0x156e10f;
     std::vector<uint8_t> b;
     AppendMovRaxImm64(b, remote_state);
     b.insert(b.end(), {0x83, 0x38, 0x00});              // cmp dword ptr [rax],0
-    size_t jne_skip_load = AppendJcc8(b, 0x75);
+    size_t jne_skip_load = AppendJcc32(b, 0x85);
     AppendMovRdxImm64(b, remote_state);
+    AppendMovRaxImm64(b, font_struct_ptr_global);
+    b.insert(b.end(), {
+        0x48, 0x8b, 0x00,                                // mov rax,[rax]
+        0x48, 0x85, 0xc0                                 // test rax,rax
+    });
+    size_t jz_skip_no_struct = AppendJcc32(b, 0x84);
+    AppendMovR11Imm64(b, font_struct_handle_global);
+    b.insert(b.end(), {
+        0x45, 0x8b, 0x1b,                                // mov r11d,[r11]
+        0x45, 0x85, 0xdb                                 // test r11d,r11d
+    });
+    size_t jz_skip_no_handle = AppendJcc32(b, 0x84);
+    b.insert(b.end(), {
+        0x48, 0x8d, 0xb2, 0x40, 0x00, 0x00, 0x00,        // lea rsi,[rdx+0x40]
+        0x48, 0x8d, 0xb8, 0xb8, 0x00, 0x00, 0x00,        // lea rdi,[rax+0xB8]
+        0xb9, 0x80, 0x00, 0x00, 0x00,                    // mov ecx,0x80
+        0xf3, 0xa4,                                      // rep movsb
+        0x41, 0x81, 0xc3, 0xb8, 0x00, 0x00, 0x00,        // add r11d,0xB8
+        0x44, 0x89, 0x5a, 0x04                           // mov [rdx+4],r11d
+    });
     AppendMovRaxImm64(b, vm_stack_ptr);
     b.insert(b.end(), {
         0x8b, 0x08,                                      // mov ecx,[rax]
@@ -512,7 +562,9 @@ std::vector<uint8_t> MakeFontLoaderHookStub(uint64_t module_base, uint64_t remot
         0x48, 0x8b, 0x7c, 0x24, 0x40                     // mov rdi,[rsp+0x40]
     });
     AppendAbsJmp(b, epilogue_continue);
-    PatchJcc8(b, jne_skip_load, skip_load);
+    PatchJcc32(b, jne_skip_load, skip_load);
+    PatchJcc32(b, jz_skip_no_struct, skip_load);
+    PatchJcc32(b, jz_skip_no_handle, skip_load);
     return b;
 }
 
@@ -616,6 +668,25 @@ DWORD FindProcessByName(const std::wstring& name) {
     }
     CloseHandle(snap);
     return found;
+}
+
+DWORD WaitForProcessByName(const std::wstring& name, DWORD wait_ms) {
+    const DWORD step_ms = 250;
+    DWORD waited = 0;
+    DWORD pid = FindProcessByName(name);
+    if (pid != 0) return pid;
+
+    Log(L"waiting for process " + name + L", wait_ms=" + std::to_wstring(wait_ms));
+    while (waited < wait_ms) {
+        Sleep(step_ms);
+        waited += step_ms;
+        pid = FindProcessByName(name);
+        if (pid != 0) {
+            Log(L"found process after " + std::to_wstring(waited) + L" ms");
+            return pid;
+        }
+    }
+    return 0;
 }
 
 uint64_t FindModuleBase(DWORD pid, const std::wstring& module_name) {
@@ -808,26 +879,29 @@ bool PrepareRemoteFontName(HANDLE process, uint64_t module_base, const Options& 
         Log(L"abort: could not read native font globals");
         return false;
     }
-    if (font_struct_ptr == 0 || font_struct_handle == 0) {
-        Log(L"abort: native font struct is not initialized yet");
-        return false;
-    }
 
     std::vector<uint8_t> name(kFontFilenameScratchSize, 0);
     std::copy(opt.native_font_name.begin(), opt.native_font_name.end(), name.begin());
-    uint64_t remote_name_ptr = font_struct_ptr + kFontFilenameScratchOffset;
-    if (!WriteMem(process, remote_name_ptr, name.data(), name.size())) {
-        Log(L"abort: could not write Korean font filename scratch slot");
-        return false;
-    }
 
     RemoteStateLocal state{};
     state.korean_c0_handle = 0;
-    state.filename_handle = font_struct_handle + kFontFilenameScratchOffset;
+    state.filename_handle = font_struct_handle == 0 ? 0 : font_struct_handle + kFontFilenameScratchOffset;
+    std::copy(opt.native_font_name.begin(), opt.native_font_name.end(), state.native_name);
     LPVOID remote_state = VirtualAllocEx(process, nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!remote_state) {
         Log(L"abort: VirtualAllocEx remote state failed error=" + std::to_wstring(GetLastError()));
         return false;
+    }
+    if (font_struct_ptr != 0 && font_struct_handle != 0) {
+        uint64_t remote_name_ptr = font_struct_ptr + kFontFilenameScratchOffset;
+        if (!WriteMem(process, remote_name_ptr, name.data(), name.size())) {
+            Log(L"abort: could not write Korean font filename scratch slot");
+            return false;
+        }
+        Log(L"Korean filename scratch ptr: " + Hex64(remote_name_ptr));
+        Log(L"Korean filename scratch handle: " + Hex64(state.filename_handle));
+    } else {
+        Log(L"native font globals are not initialized yet; loader hook will stage the filename at runtime");
     }
     if (!WriteMem(process, reinterpret_cast<uint64_t>(remote_state), &state, sizeof(state))) {
         Log(L"abort: could not write remote state");
@@ -837,8 +911,6 @@ bool PrepareRemoteFontName(HANDLE process, uint64_t module_base, const Options& 
     *remote_state_out = reinterpret_cast<uint64_t>(remote_state);
     Log(L"native font struct ptr: " + Hex64(font_struct_ptr));
     Log(L"native font struct handle: " + Hex64(font_struct_handle));
-    Log(L"Korean filename scratch ptr: " + Hex64(remote_name_ptr));
-    Log(L"Korean filename scratch handle: " + Hex64(state.filename_handle));
     Log(L"Korean native filename: " + WidenAscii(opt.native_font_name));
     Log(L"remote patch state: " + Hex64(*remote_state_out));
     return true;
@@ -948,6 +1020,30 @@ bool WaitForKoreanHandle(HANDLE process, uint64_t remote_state, DWORD wait_ms, u
     return false;
 }
 
+bool JapaneseFontHandlesReady(HANDLE process, uint64_t module_base) {
+    uint64_t font_struct_ptr = 0;
+    if (!ReadMem(process, module_base + kGlobalFontStructPtrRva, &font_struct_ptr, sizeof(font_struct_ptr)) ||
+        font_struct_ptr == 0) {
+        Log(L"Japanese font handles are not ready yet: font struct pointer is zero");
+        return false;
+    }
+    const uint32_t offsets[] = {0x10, 0x24, 0x38, 0x4c, 0x60, 0x74};
+    bool all_ready = true;
+    std::wstring summary = L"Japanese font handles:";
+    for (uint32_t offset : offsets) {
+        uint32_t handle = 0;
+        if (!ReadMem(process, font_struct_ptr + offset, &handle, sizeof(handle))) {
+            all_ready = false;
+            summary += L" +" + Hex64(offset) + L"=<read failed>";
+            continue;
+        }
+        if (handle == 0) all_ready = false;
+        summary += L" +" + Hex64(offset) + L"=" + Hex64(handle);
+    }
+    Log(summary);
+    return all_ready;
+}
+
 bool TryDirectKoreanLoad(HANDLE process, uint64_t module_base, uint64_t remote_state, uint32_t* handle_out) {
     std::vector<uint8_t> stub = MakeDirectFontLoadStub(module_base, remote_state);
     LPVOID remote_stub = VirtualAllocEx(process, nullptr, stub.size(), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -1019,13 +1115,21 @@ bool Install(HANDLE process, DWORD pid, uint64_t module_base, const Options& opt
     if (!loader) return false;
 
     uint32_t korean_handle = 0;
-    if (!TryDirectKoreanLoad(process, module_base, remote_state, &korean_handle)) {
+    bool loader_installed = false;
+    bool japanese_handles_ready = JapaneseFontHandlesReady(process, module_base);
+    if (japanese_handles_ready) {
+        TryDirectKoreanLoad(process, module_base, remote_state, &korean_handle);
+    } else {
+        Log(L"direct Korean C0 page load skipped because Japanese font handles are not fully loaded yet");
+    }
+    if (korean_handle == 0) {
         Log(L"direct Korean C0 page load did not produce a handle; installing loader hook fallback");
         {
             SuspendedThreads suspended(pid, opt.suspend_threads);
             if (!InstallOneSite(process, module_base, *loader, remote_state)) {
                 return false;
             }
+            loader_installed = true;
         }
 
         Log(L"waiting for native font loader to create Korean C0 page handle, wait_ms=" +
@@ -1037,6 +1141,19 @@ bool Install(HANDLE process, DWORD pid, uint64_t module_base, const Options& opt
         }
     }
     Log(L"Korean C0 page native handle: " + Hex64(korean_handle));
+
+    std::vector<PatchSite> text_sites;
+    for (const auto& site : sites) {
+        if (site.kind != PatchKind::FontLoaderHook) text_sites.push_back(site);
+    }
+    Log(L"waiting for runtime-decrypted scanner/renderer signatures, wait_ms=" +
+        std::to_wstring(opt.wait_ms));
+    if (!WaitForRuntimeBytes(process, module_base, text_sites, opt.wait_ms)) {
+        Log(L"abort: scanner/renderer runtime signatures did not match before timeout");
+        if (loader_installed) RestoreSites(process, pid, module_base, opt.suspend_threads, {*loader});
+        return false;
+    }
+    Log(L"scanner/renderer runtime signatures validated");
 
     bool all_ok = true;
     bool wrote_any = false;
@@ -1109,7 +1226,7 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
-    DWORD pid = opt.pid ? opt.pid : FindProcessByName(opt.process_name);
+    DWORD pid = opt.pid ? opt.pid : WaitForProcessByName(opt.process_name, opt.wait_ms);
     if (!pid) {
         Log(L"target process not found: " + opt.process_name);
         return 1;
@@ -1144,13 +1261,19 @@ int wmain(int argc, wchar_t** argv) {
     bool ok = false;
     std::vector<PatchSite> sites = Sites();
     if (_wcsicmp(opt.action.c_str(), L"install") == 0) {
-        Log(L"waiting for runtime-decrypted signatures, wait_ms=" + std::to_wstring(opt.wait_ms));
-        if (!WaitForRuntimeBytes(process, module_base, sites, opt.wait_ms)) {
-            Log(L"abort: runtime signatures did not match before timeout");
+        const PatchSite* loader = FindSite(PatchKind::FontLoaderHook, sites);
+        if (!loader) {
+            Log(L"abort: loader patch site is not defined");
             CloseHandle(process);
             return 1;
         }
-        Log(L"runtime signatures validated");
+        Log(L"waiting for runtime-decrypted loader signature, wait_ms=" + std::to_wstring(opt.wait_ms));
+        if (!WaitForRuntimeBytes(process, module_base, std::vector<PatchSite>{*loader}, opt.wait_ms)) {
+            Log(L"abort: loader runtime signature did not match before timeout");
+            CloseHandle(process);
+            return 1;
+        }
+        Log(L"loader runtime signature validated");
         ok = Install(process, pid, module_base, opt);
     } else if (_wcsicmp(opt.action.c_str(), L"restore") == 0) {
         ok = RestoreSites(process, pid, module_base, opt.suspend_threads, sites);

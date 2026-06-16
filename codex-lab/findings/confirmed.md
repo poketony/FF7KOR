@@ -21,6 +21,7 @@ Method:
 - `codex-lab/poc_runtime_patch/verify_first_korean_glyph_package.py` verifies that `C0 21` resolves to `U+AC00`, the TEX/TIM alias has a 1024x1024 header probe, and the selected destination cell contains non-empty glyph pixels.
 - Current runtime patch sites for the first field-visible POC are recorded in `codex-lab/findings/poc_patch_sites.csv`.
 - Runtime test of the first artifact confirmed that staging and signature validation succeeded, but a loader-hook-only install can time out when `FUN_14156df20` does not execute again after the hook is installed. The patcher now attempts a direct `FUN_14004AB00(0x6710AC, 5, ...)` load first and keeps the `FUN_14156df20` hook as fallback.
+- Runtime test of the direct-load artifact showed `direct_arg0=0x20014C8`, `direct_arg1=0x2001F9C`, `direct_arg2=0x18FEFC`, `direct_arg3=0x20014C8`, and `stored_handle=0`. This confirms that arbitrary current `DAT_1420395C8` VM-stack values are not sufficient to recreate the font-loader context after the lifecycle has already passed.
 
 ## PE and dump baseline
 
