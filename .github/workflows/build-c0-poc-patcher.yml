@@ -1,4 +1,4 @@
-name: Build compact D1-safe menu_ja patcher
+name: Build native-lead reuse menu_ja patcher
 
 on:
   workflow_dispatch:
@@ -6,17 +6,11 @@ on:
     paths:
       - "codex-lab/poc_runtime_patch/**"
       - "codex-lab/tools/build_compact_patcher_source.py"
-      - "codex-lab/tools/compact_jafont_common.py"
-      - "codex-lab/tools/repack_menu_jafont_compact_d1.py"
-      - "codex-lab/tools/verify_compact_menu_jafont.py"
       - ".github/workflows/build-c0-poc-patcher.yml"
   pull_request:
     paths:
       - "codex-lab/poc_runtime_patch/**"
       - "codex-lab/tools/build_compact_patcher_source.py"
-      - "codex-lab/tools/compact_jafont_common.py"
-      - "codex-lab/tools/repack_menu_jafont_compact_d1.py"
-      - "codex-lab/tools/verify_compact_menu_jafont.py"
       - ".github/workflows/build-c0-poc-patcher.yml"
 
 permissions:
@@ -42,30 +36,38 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Validate Python sources
+      - name: Validate and generate patcher source
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python -m py_compile `
-            codex-lab/tools/build_compact_patcher_source.py `
-            codex-lab/tools/compact_jafont_common.py `
-            codex-lab/tools/repack_menu_jafont_compact_d1.py `
-            codex-lab/tools/verify_compact_menu_jafont.py
-          if ($LASTEXITCODE -ne 0) {
-            throw "Python source validation failed with exit code $LASTEXITCODE"
-          }
-
-      - name: Generate compact patcher source
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
+          python -m py_compile codex-lab/tools/build_compact_patcher_source.py
           python codex-lab/tools/build_compact_patcher_source.py
           if ($LASTEXITCODE -ne 0) {
-            throw "Compact patcher source generation failed with exit code $LASTEXITCODE"
+            throw "Patcher source generation failed with exit code $LASTEXITCODE"
           }
           $generated = "codex-lab/poc_runtime_patch/c0_poc_patcher_compact.cpp"
           if (!(Test-Path -LiteralPath $generated -PathType Leaf)) {
             throw "Generated patcher source is missing: $generated"
+          }
+          $source = Get-Content -LiteralPath $generated -Raw
+          foreach ($required in @(
+            "kLastKoreanLead = 0xC5",
+            "jafont_7.tim .. jafont_12.tim",
+            "menu_jafont_7_12_loader_hook"
+          )) {
+            if (!$source.Contains($required)) {
+              throw "Generated source is missing required compact marker: $required"
+            }
+          }
+          foreach ($forbidden in @(
+            "kLastKoreanLead = 0xCB",
+            "kLastKoreanLead = 0xCC",
+            "jafont_15.tim",
+            "jafont_19.tim"
+          )) {
+            if ($source.Contains($forbidden)) {
+              throw "Generated source still contains forbidden old marker: $forbidden"
+            }
           }
 
       - name: Build x64 Release patcher
@@ -110,28 +112,26 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $stage = "artifact/ff7-2026-compact-d1-patcher-windows-x64"
+          $stage = "artifact/ff7-2026-native-lead-reuse-patcher-windows-x64"
           if (Test-Path -LiteralPath $stage) {
             Remove-Item -LiteralPath $stage -Recurse -Force
           }
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -LiteralPath "codex-lab/poc_runtime_patch/c0_poc_patcher.exe" -Destination $stage
           Copy-Item -LiteralPath "codex-lab/poc_runtime_patch/README.md" -Destination $stage
-          Copy-Item -LiteralPath "codex-lab/tools/repack_menu_jafont_compact_d1.py" -Destination $stage
-          Copy-Item -LiteralPath "codex-lab/tools/verify_compact_menu_jafont.py" -Destination $stage
           @(
             "commit_sha=${{ github.sha }}"
-            "encoding_pages=C0-CB"
-            "safe_trails=00-D1"
-            "runtime_added_pages=jafont_7-jafont_15"
-            "reused_native_pages=C9:jafont_4,CA:jafont_5,CB:jafont_6"
+            "new_leads=C0-C5"
+            "runtime_added_pages=jafont_7-jafont_12"
+            "native_leads=FA:jafont_2,FB:jafont_3,FC:jafont_4,FD:jafont_5,FE:jafont_6"
+            "jafont_1=untouched"
           ) | Set-Content -LiteralPath "$stage/build-info.txt" -Encoding ascii
           Get-ChildItem -LiteralPath $stage | Select-Object Name, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ff7-2026-compact-d1-patcher-windows-x64
-          path: artifact/ff7-2026-compact-d1-patcher-windows-x64/**
+          name: ff7-2026-native-lead-reuse-patcher-windows-x64
+          path: artifact/ff7-2026-native-lead-reuse-patcher-windows-x64/**
           if-no-files-found: error
           retention-days: 14
