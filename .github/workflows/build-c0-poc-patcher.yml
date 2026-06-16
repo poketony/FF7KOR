@@ -1,158 +1,75 @@
-name: Build menu_ja jafont extension patcher
+name: Build field-only native-lead patcher
 
 on:
   workflow_dispatch:
   push:
     paths:
       - "codex-lab/poc_runtime_patch/**"
-      - "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/**"
-      - "codex-lab/tools/build_menu_jafont_extension.py"
-      - "codex-lab/findings/poc_patch_sites.csv"
-      - "codex-lab/findings/menu_ja_jafont_extension_assets.md"
-      - "ff7K(PC).tbl"
+      - "codex-lab/tools/build_compact_patcher_source.py"
       - ".github/workflows/build-c0-poc-patcher.yml"
   pull_request:
     paths:
       - "codex-lab/poc_runtime_patch/**"
-      - "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/**"
-      - "codex-lab/tools/build_menu_jafont_extension.py"
-      - "codex-lab/findings/poc_patch_sites.csv"
-      - "codex-lab/findings/menu_ja_jafont_extension_assets.md"
-      - "ff7K(PC).tbl"
+      - "codex-lab/tools/build_compact_patcher_source.py"
       - ".github/workflows/build-c0-poc-patcher.yml"
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 10
-
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Verify generated menu_ja font pages
+      - name: Generate source
         shell: pwsh
         run: |
-          $root = "codex-lab/generated/menu_ja_jafont_ext_tbl_exact"
-          if (!(Test-Path $root)) {
-            throw "Missing generated asset folder: $root"
+          python -m py_compile codex-lab/tools/build_compact_patcher_source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python codex-lab/tools/build_compact_patcher_source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = "codex-lab/poc_runtime_patch/c0_poc_patcher_compact.cpp"
+          if (!(Test-Path $p)) { throw "generated source missing" }
+          $s = Get-Content $p -Raw
+          foreach ($x in @("field_render_scanner_prefix","field_layout_scanner_prefix","glyph_renderer_c0_page_select","jafont_7.tim .. jafont_12.tim")) {
+            if (!$s.Contains($x)) { throw "missing marker: $x" }
+          }
+          foreach ($x in @("common_render_scanner_prefix","common_width_scanner_prefix","jafont_13.tim","jafont_19.tim")) {
+            if ($s.Contains($x)) { throw "forbidden marker: $x" }
           }
 
-          $texFiles = Get-ChildItem $root -Filter "jafont_*.tex" | Sort-Object Name
-          if ($texFiles.Count -ne 13) {
-            throw "Expected 13 generated TEX pages, found $($texFiles.Count)"
-          }
-
-          foreach ($n in 7..19) {
-            $path = Join-Path $root "jafont_$n.tex"
-            if (!(Test-Path $path)) {
-              throw "Missing generated TEX page: $path"
-            }
-            $item = Get-Item $path
-            if ($item.Length -le 0) {
-              throw "Generated TEX page has zero size: $path"
-            }
-          }
-
-          $mapPath = Join-Path $root "menu_jafont_extension_mapping.json"
-          if (!(Test-Path $mapPath)) {
-            throw "Missing mapping JSON: $mapPath"
-          }
-          $map = Get-Content $mapPath -Raw -Encoding UTF8 | ConvertFrom-Json
-
-          $checks = @{
-            "C01A" = "U+AC00"
-            "C260" = "U+B2E4"
-            "C702" = "U+C2E0"
-            "C9A9" = "U+CC38"
-            "C810" = "U+C640"
-          }
-          foreach ($key in $checks.Keys) {
-            $entry = $map.byte_to_unicode.PSObject.Properties[$key].Value
-            if ($null -eq $entry) {
-              throw "Missing mapping entry: $key"
-            }
-            if ($entry.unicode -ne $checks[$key]) {
-              throw "Unexpected Unicode for $key: $($entry.unicode), expected $($checks[$key])"
-            }
-          }
-
-      - name: Build x64 Release patcher
+      - name: Build x64
         shell: cmd
         run: |
           set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-          if not exist "%VSWHERE%" (
-            echo vswhere.exe was not found.
-            exit /b 1
-          )
-
           for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
-          if not defined VSINSTALL (
-            echo Visual Studio with MSVC x64 tools was not found.
-            exit /b 1
-          )
-
-          if exist "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" (
-            call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
-          ) else (
-            call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
-          )
+          if not defined VSINSTALL exit /b 1
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b %errorlevel%
+          call codex-lab\poc_runtime_patch\build_msvc_x64.bat
           if errorlevel 1 exit /b %errorlevel%
 
-          where cl
-          where link
-          call codex-lab\poc_runtime_patch\build_msvc_x64.bat
-
-      - name: Verify executable
+      - name: Stage
         shell: pwsh
         run: |
-          $exe = "codex-lab/poc_runtime_patch/c0_poc_patcher.exe"
-          if (!(Test-Path $exe)) {
-            throw "Expected executable was not produced: $exe"
-          }
-          $item = Get-Item $exe
-          if ($item.Length -le 0) {
-            throw "Expected executable has zero size: $exe"
-          }
-          Write-Host "Verified $exe ($($item.Length) bytes)"
-
-      - name: Stage artifact files
-        shell: pwsh
-        run: |
-          $stage = "artifact/ff7-2026-menu-ja-jafont-extension-windows-x64"
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          New-Item -ItemType Directory -Force -Path "$stage/generated/menu_ja_jafont_ext_tbl_exact" | Out-Null
-          New-Item -ItemType Directory -Force -Path "$stage/findings" | Out-Null
-
-          Copy-Item "codex-lab/poc_runtime_patch/c0_poc_patcher.exe" $stage
-          Copy-Item "codex-lab/poc_runtime_patch/README.md" $stage
-          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/jafont_*.tex" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
-          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/menu_jafont_extension_mapping.csv" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
-          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/menu_jafont_extension_mapping.json" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
-          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/README.md" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
-          Copy-Item "codex-lab/generated/menu_ja_jafont_ext_tbl_exact/menu_jafont_extension_duplicates.csv" "$stage/generated/menu_ja_jafont_ext_tbl_exact/"
-
-          if (Test-Path "codex-lab/findings/poc_patch_sites.csv") {
-            Copy-Item "codex-lab/findings/poc_patch_sites.csv" "$stage/findings/"
-          }
-          if (Test-Path "codex-lab/findings/menu_ja_jafont_extension_assets.md") {
-            Copy-Item "codex-lab/findings/menu_ja_jafont_extension_assets.md" "$stage/findings/"
-          }
-          if (Test-Path "codex-lab/findings/first_korean_glyph_test_vector.md") {
-            Copy-Item "codex-lab/findings/first_korean_glyph_test_vector.md" "$stage/findings/"
-          }
-
-          $timestamp = (Get-Date).ToUniversalTime().ToString("o")
+          $out = "artifact/field-only"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "codex-lab/poc_runtime_patch/c0_poc_patcher.exe" $out
+          Copy-Item "codex-lab/poc_runtime_patch/README.md" $out
           @(
-            "commit_sha=${{ github.sha }}"
-            "build_timestamp_utc=$timestamp"
-          ) | Set-Content "$stage/build-info.txt" -Encoding ascii
+            "new_leads=C0-C5",
+            "added_pages=jafont_7-jafont_12",
+            "hooks=loader,field_render,field_layout,glyph_renderer",
+            "excluded=common_render,common_width"
+          ) | Set-Content "$out/build-info.txt" -Encoding ascii
 
-          Get-ChildItem -Recurse $stage | Select-Object FullName,Length
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ff7-2026-menu-ja-jafont-extension-windows-x64
-          path: artifact/ff7-2026-menu-ja-jafont-extension-windows-x64/**
+          name: ff7-2026-field-only-native-lead-patcher-windows-x64
+          path: artifact/field-only/**
           if-no-files-found: error

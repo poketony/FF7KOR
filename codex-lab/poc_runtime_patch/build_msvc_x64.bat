@@ -2,6 +2,15 @@
 setlocal
 cd /d "%~dp0"
 
+where python.exe >nul 2>nul
+if %ERRORLEVEL% neq 0 (
+  echo python.exe was not found.
+  exit /b 1
+)
+
+python ..\tools\build_compact_patcher_source.py
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 where cl.exe >nul 2>nul
 if %ERRORLEVEL%==0 goto build
 
@@ -22,5 +31,5 @@ call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 :build
-cl /nologo /std:c++17 /EHsc /W4 /O2 /DNDEBUG /DUNICODE /D_UNICODE c0_poc_patcher.cpp /Fe:c0_poc_patcher.exe
+cl /nologo /std:c++17 /EHsc /W4 /O2 /DNDEBUG /DUNICODE /D_UNICODE c0_poc_patcher_compact.cpp /Fe:c0_poc_patcher.exe
 exit /b %ERRORLEVEL%
