@@ -1,4 +1,54 @@
-# C0 00 runtime test plan
+# First Korean Glyph Runtime Test Plan
+
+## Current test target
+
+This supersedes the earlier `C0 00 -> FA 00` menu-only POC test. The current vertical slice targets native 2026 field text from `jfleve.lgp`.
+
+Selected field payload:
+
+```text
+B4 C0 21 B5 FF
+```
+
+Expected output:
+
+```text
+Ａ가Ｂ
+```
+
+Requirements:
+
+- `B4` renders first as full-width `Ａ`.
+- `C0 21` renders `가` from `resources/korean_font/korean_c0_page.tim`.
+- `B5` renders immediately after `가`, proving cursor advance is exactly two bytes for the Korean glyph.
+- `FF` terminates the FF7 text stream.
+- The `가` advance is one full native cell, width `0x40`.
+- Existing Japanese `FA-FE` rendering remains unchanged.
+
+Patch command after launching FFVII:
+
+```bat
+c0_poc_patcher.exe install --process FFVII.exe --wait-ms 120000 --log first_korean_glyph_patch.log
+```
+
+Do not enter the modified field scene until the log reports:
+
+```text
+Korean C0 page native handle: 0x...
+completed successfully
+```
+
+Rollback:
+
+```bat
+c0_poc_patcher.exe restore --process FFVII.exe --log first_korean_glyph_patch.log
+```
+
+Detailed byte boundaries and edit guidance are in `codex-lab/findings/first_korean_glyph_test_vector.md`.
+
+---
+
+# Historical C0 00 runtime test plan
 
 Goal: prove that `C0 00` behaves exactly like `FA 00` in the confirmed common menu render and width paths.
 

@@ -1,0 +1,26 @@
+{
+  "source_mapping": "codex-lab\\generated\\korean_mapping.json",
+  "source_atlas": "codex-lab\\work\\hangulfont-ksx1001-gulim-shadow2x",
+  "generated_files": {
+    "png": "korean_c0_page.png",
+    "tex": "korean_c0_page.tex",
+    "tim_alias": "korean_c0_page.tim",
+    "preview": "korean_c0_page_preview.png",
+    "selected_glyph_preview": "selected_glyph_ga_c021.png"
+  },
+  "page": "c0",
+  "lead_byte": "C0",
+  "selected_character": "가",
+  "selected_sequence": "C0 21",
+  "selected_glyph_index": 33,
+  "selected_width": 64,
+  "cell_size": 64,
+  "image_size": [
+    1024,
+    1024
+  ],
+  "tex_format": "PyFF7 TEX bmp_mode=True; byte-identical container style to existing 1024x1024 RGBA font pages",
+  "missing_source_glyph_sequences": [
+    "C0 12"
+  ]
+}

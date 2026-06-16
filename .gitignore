@@ -1,8 +1,21 @@
 /codex-lab/*
 !/codex-lab/work/
 /codex-lab/work/*
+!/codex-lab/work/validate_korean_mapping.py
 !/codex-lab/work/ff7kor-xaudio-proxy/
 !/codex-lab/work/ff7kor-xaudio-proxy/**
+!/codex-lab/generated/
+!/codex-lab/generated/korean_mapping.json
+!/codex-lab/resources/
+!/codex-lab/resources/korean_font/
+!/codex-lab/resources/korean_font/**
+/codex-lab/resources/korean_font/*.tex
+/codex-lab/resources/korean_font/*.tim
+!/codex-lab/findings/
+!/codex-lab/findings/**
+!/codex-lab/poc_runtime_patch/
+!/codex-lab/poc_runtime_patch/**
+/codex-lab/c0-poc-patcher-windows-x64/
 /기타 자료
 /PyFF7-master
 /tools
@@ -24,6 +37,7 @@ runtime_dump/
 
 # Logs and local build outputs
 *.log
+__pycache__/
 build/
 build-*/
 poc_runtime_patch/c0_poc_patcher.exe
@@ -35,3 +49,12 @@ poc_runtime_patch/*.lib
 poc_runtime_patch/build/
 poc_runtime_patch/build-*/
 poc_runtime_patch/artifact/
+codex-lab/poc_runtime_patch/c0_poc_patcher.exe
+codex-lab/poc_runtime_patch/*.obj
+codex-lab/poc_runtime_patch/*.pdb
+codex-lab/poc_runtime_patch/*.ilk
+codex-lab/poc_runtime_patch/*.exp
+codex-lab/poc_runtime_patch/*.lib
+codex-lab/poc_runtime_patch/build/
+codex-lab/poc_runtime_patch/build-*/
+codex-lab/poc_runtime_patch/artifact/

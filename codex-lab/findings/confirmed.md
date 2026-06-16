@@ -8,6 +8,19 @@ Method:
 - A separate analysis overlay was created at `codex-lab/work/runtime_dump/FFVII_runtime_overlay.exe` by copying the original PE and replacing section bytes with runtime memory from the dump. The original `FFVII.exe` was not modified.
 - Ghidra headless was run against the separate overlay project under `codex-lab/work/ghidra_projects/FFVII_runtime_quick`; the user's open Ghidra database and the original binary were not edited.
 
+## First Korean glyph vertical slice
+
+- `txt.cpp` is the authoritative Korean mapping source for this POC.
+- `FF7Text::caract_jp_c0[0x21]` maps to `가` (`U+AC00`), so the selected test encoding is `C0 21`.
+- The generated Korean C0 page places the `가` glyph at cell index `0x21` using pixels copied from the supplied Gulim shadow2x source atlas.
+- Generated runtime resources:
+  - `codex-lab/resources/korean_font/korean_c0_page.tim`
+  - `codex-lab/resources/korean_font/korean_c0_page.tex`
+  - `codex-lab/resources/korean_font/korean_c0_page.png`
+  - `codex-lab/resources/korean_font/korean_c0_manifest.json`
+- `codex-lab/poc_runtime_patch/verify_first_korean_glyph_package.py` verifies that `C0 21` resolves to `U+AC00`, the TEX/TIM alias has a 1024x1024 header probe, and the selected destination cell contains non-empty glyph pixels.
+- Current runtime patch sites for the first field-visible POC are recorded in `codex-lab/findings/poc_patch_sites.csv`.
+
 ## PE and dump baseline
 
 Ghidra loaded the original program at image base `0x140000000`.
