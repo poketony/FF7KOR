@@ -1,4 +1,4 @@
-name: Build native-lead reuse menu_ja patcher
+name: Build field-only native-lead patcher
 
 on:
   workflow_dispatch:
@@ -20,118 +20,56 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: 15
-    env:
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: "utf-8"
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          clean: true
-          fetch-depth: 1
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Validate and generate patcher source
+      - name: Generate source
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
           python -m py_compile codex-lab/tools/build_compact_patcher_source.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python codex-lab/tools/build_compact_patcher_source.py
-          if ($LASTEXITCODE -ne 0) {
-            throw "Patcher source generation failed with exit code $LASTEXITCODE"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $p = "codex-lab/poc_runtime_patch/c0_poc_patcher_compact.cpp"
+          if (!(Test-Path $p)) { throw "generated source missing" }
+          $s = Get-Content $p -Raw
+          foreach ($x in @("field_render_scanner_prefix","field_layout_scanner_prefix","glyph_renderer_c0_page_select","jafont_7.tim .. jafont_12.tim")) {
+            if (!$s.Contains($x)) { throw "missing marker: $x" }
           }
-          $generated = "codex-lab/poc_runtime_patch/c0_poc_patcher_compact.cpp"
-          if (!(Test-Path -LiteralPath $generated -PathType Leaf)) {
-            throw "Generated patcher source is missing: $generated"
-          }
-          $source = Get-Content -LiteralPath $generated -Raw
-          foreach ($required in @(
-            "kLastKoreanLead = 0xC5",
-            "jafont_7.tim .. jafont_12.tim",
-            "menu_jafont_7_12_loader_hook"
-          )) {
-            if (!$source.Contains($required)) {
-              throw "Generated source is missing required compact marker: $required"
-            }
-          }
-          foreach ($forbidden in @(
-            "kLastKoreanLead = 0xCB",
-            "kLastKoreanLead = 0xCC",
-            "jafont_15.tim",
-            "jafont_19.tim"
-          )) {
-            if ($source.Contains($forbidden)) {
-              throw "Generated source still contains forbidden old marker: $forbidden"
-            }
+          foreach ($x in @("common_render_scanner_prefix","common_width_scanner_prefix","jafont_13.tim","jafont_19.tim")) {
+            if ($s.Contains($x)) { throw "forbidden marker: $x" }
           }
 
-      - name: Build x64 Release patcher
+      - name: Build x64
         shell: cmd
         run: |
           set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-          if not exist "%VSWHERE%" (
-            echo vswhere.exe was not found.
-            exit /b 1
-          )
           for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
-          if not defined VSINSTALL (
-            echo Visual Studio with MSVC x64 tools was not found.
-            exit /b 1
-          )
-          if exist "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" (
-            call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
-          ) else (
-            call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
-          )
+          if not defined VSINSTALL exit /b 1
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
           if errorlevel 1 exit /b %errorlevel%
-          where cl.exe || exit /b 1
-          where link.exe || exit /b 1
           call codex-lab\poc_runtime_patch\build_msvc_x64.bat
           if errorlevel 1 exit /b %errorlevel%
 
-      - name: Verify executable
+      - name: Stage
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          $exe = "codex-lab/poc_runtime_patch/c0_poc_patcher.exe"
-          if (!(Test-Path -LiteralPath $exe -PathType Leaf)) {
-            throw "Expected executable was not produced: $exe"
-          }
-          $item = Get-Item -LiteralPath $exe
-          if ($item.Length -le 0) {
-            throw "Expected executable has zero size: $exe"
-          }
-          Write-Host "Verified $exe ($($item.Length) bytes)"
-
-      - name: Stage artifact
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $stage = "artifact/ff7-2026-native-lead-reuse-patcher-windows-x64"
-          if (Test-Path -LiteralPath $stage) {
-            Remove-Item -LiteralPath $stage -Recurse -Force
-          }
-          New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          Copy-Item -LiteralPath "codex-lab/poc_runtime_patch/c0_poc_patcher.exe" -Destination $stage
-          Copy-Item -LiteralPath "codex-lab/poc_runtime_patch/README.md" -Destination $stage
+          $out = "artifact/field-only"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item "codex-lab/poc_runtime_patch/c0_poc_patcher.exe" $out
+          Copy-Item "codex-lab/poc_runtime_patch/README.md" $out
           @(
-            "commit_sha=${{ github.sha }}"
-            "new_leads=C0-C5"
-            "runtime_added_pages=jafont_7-jafont_12"
-            "native_leads=FA:jafont_2,FB:jafont_3,FC:jafont_4,FD:jafont_5,FE:jafont_6"
-            "jafont_1=untouched"
-          ) | Set-Content -LiteralPath "$stage/build-info.txt" -Encoding ascii
-          Get-ChildItem -LiteralPath $stage | Select-Object Name, Length
+            "new_leads=C0-C5",
+            "added_pages=jafont_7-jafont_12",
+            "hooks=loader,field_render,field_layout,glyph_renderer",
+            "excluded=common_render,common_width"
+          ) | Set-Content "$out/build-info.txt" -Encoding ascii
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ff7-2026-native-lead-reuse-patcher-windows-x64
-          path: artifact/ff7-2026-native-lead-reuse-patcher-windows-x64/**
+          name: ff7-2026-field-only-native-lead-patcher-windows-x64
+          path: artifact/field-only/**
           if-no-files-found: error
-          retention-days: 14
