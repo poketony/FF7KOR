@@ -1,33 +1,37 @@
-# FFVII 2026 compact D1-safe menu_ja patcher
+# FFVII 2026 native-lead reuse menu_ja patcher
 
-This package uses a compact Korean mapping designed around the observed loader ceiling.
+This build keeps the original Japanese `FA..FE` lead codes and adds only six new Korean leads. It is designed to reduce the font heap from fifteen loaded pages to twelve.
 
-The patcher loads only `jafont_7.tim` through `jafont_15.tim` as additional resources. Three native pages are reused for the final Korean blocks:
+## Page and lead layout
 
 ```text
-C0 -> jafont_7
-C1 -> jafont_8
-C2 -> jafont_9
-C3 -> jafont_10
-C4 -> jafont_11
-C5 -> jafont_12
-C6 -> jafont_13
-C7 -> jafont_14
-C8 -> jafont_15
-C9 -> jafont_4
-CA -> jafont_5
-CB -> jafont_6
+C0 -> jafont_7   slots 00..D1
+C1 -> jafont_8   slots 00..D1
+C2 -> jafont_9   slots 00..D1
+C3 -> jafont_10  slots 00..D1
+C4 -> jafont_11  slots 00..D1
+C5 -> jafont_12  slots 00..D1
+
+FA -> jafont_2   slots 00..D1 replaced; D2..FF original
+FB -> jafont_3   slots 00..FE replaced; FF original
+FC -> jafont_4   slots 00..D1 replaced; D2..FF original
+FD -> jafont_5   slots 00..D1 replaced; D2..FF original
+FE -> jafont_6   slots 00..D1 replaced; D2..FF original
 ```
 
-Only trail bytes `00..D1` are assigned to Korean glyphs. `D2..FF` remain reserved. On `jafont_4`, `jafont_5`, and `jafont_6`, the original `D2..FF` cells are preserved.
+`jafont_1` remains completely untouched and is not included in the font package.
 
-The patcher does not modify any LGP archive. The user replaces/adds generated TEX files manually in `menu_ja.lgp`.
+Capacity is 2,355 glyphs for the 2,354-character mapping, leaving one unused slot. The original Japanese control region beginning at `FE D2` remains in the preserved part of `jafont_6`.
 
-## Required font resources
+The patcher never modifies an LGP archive. Replace or add the TEX files manually in `menu_ja.lgp`.
 
-Use the compact font package generated for this branch and insert or replace:
+## Required resources
+
+Replace or add:
 
 ```text
+jafont_2.tex
+jafont_3.tex
 jafont_4.tex
 jafont_5.tex
 jafont_6.tex
@@ -37,37 +41,44 @@ jafont_9.tex
 jafont_10.tex
 jafont_11.tex
 jafont_12.tex
-jafont_13.tex
-jafont_14.tex
-jafont_15.tex
 ```
 
-Do not use the old compact-incompatible `jafont_16.tex` through `jafont_19.tex` mapping.
+Do not replace `jafont_1.tex`.
 
 ## Runtime behavior
 
 The patcher:
 
-1. waits for the runtime-decrypted loader signature;
-2. hooks the existing font-loader lifecycle;
-3. requests native logical names `jafont_7.tim` through `jafont_15.tim`;
-4. requires all nine added handles to be nonzero;
-5. treats `C0..CB` as Korean two-byte leads;
-6. routes `C0..C8` to the nine added handles;
-7. routes `C9..CB` to the existing native handles for pages 4, 5, and 6;
-8. patches common rendering, field rendering, width calculation, and field layout with the same lead range.
+1. waits for the runtime-decrypted font-loader signature;
+2. asks the native loader for `jafont_7.tim` through `jafont_12.tim` only;
+3. requires all six additional handles to be nonzero;
+4. recognizes only `C0..C5` as added two-byte leads;
+5. routes `C0..C5` to the six additional handles;
+6. leaves native `FA..FE` decoding and page selection on the original game path;
+7. applies the same `C0..C5` range to common rendering, common width, field rendering, and field layout.
 
-The original `FA..FE` Japanese prefix handling remains on its original path. Reusing pages 4..6 means their original `00..D1` glyphs are replaced, while their original `D2..FF` cells remain available.
+This removes the previous custom `C9..CB -> native page` routing. The original Japanese lead path is now used directly.
 
 ## Install
 
-Run the patcher around the point where the loader signature becomes available. The previously observed reliable order was launching the game and then starting the patcher immediately:
+The loader signature was most reliably observed when the game was launched and the patcher was started immediately afterward:
 
 ```bat
 c0_poc_patcher.exe install --process FFVII.exe --wait-ms 120000 --log menu_jafont_extension_patch.log
 ```
 
-A successful loader phase must show nonzero handles for every page from `jafont_7` through `jafont_15`. There should be no wait for `jafont_16` through `jafont_19` in this build.
+A successful loader phase must show exactly six nonzero additional handles:
+
+```text
+C0/jafont_7
+C1/jafont_8
+C2/jafont_9
+C3/jafont_10
+C4/jafont_11
+C5/jafont_12
+```
+
+The log must not wait for `jafont_13` or later pages.
 
 ## Restore
 
@@ -75,37 +86,37 @@ A successful loader phase must show nonzero handles for every page from `jafont_
 c0_poc_patcher.exe restore --process FFVII.exe --log menu_jafont_extension_patch.log
 ```
 
-## Compact mapping files
+## Mapping files
 
-The compact font package includes:
+The font package includes:
 
 ```text
-ff7K_compact_D1_utf8.tbl
-ff7K_compact_D1_cp949.tbl
-menu_jafont_compact_d1_mapping.csv
-menu_jafont_compact_d1_mapping.json
+ff7K_native_lead_reuse_utf8.tbl
+ff7K_native_lead_reuse_cp949.tbl
+menu_jafont_native_lead_reuse_mapping.csv
+menu_jafont_native_lead_reuse_mapping.json
 ```
 
-The compact mapping is not byte-compatible with the previous sparse `C0..CC` table. Field text must be re-encoded with the new table.
+This encoding is not byte-compatible with either of the earlier sparse or compact mappings. Field text must be re-encoded.
 
-## Field test example
+## Field test
 
-For:
+Test text:
 
 ```text
 간다신참날따라와
 ```
 
-the new compact bytes are:
+Exact bytes:
 
 ```text
-C0 02 C2 0C C5 D0 C8 67 C1 56 C2 8C C3 10 C6 C2 FF
+C0 02 C2 0C C5 D0 FC 3A C1 56 C2 8C C3 10 FA C2 FF
 ```
 
-With the current Japanese Makou Reactor table, the temporary input string producing those bytes is:
+Temporary Makou Reactor input under the original Japanese table:
 
 ```text
-ＭビＯギＲーＵとＮシＯレＰゲＳＯ
+ＭビＯギＲー廃ＮシＯレＰゲ目
 ```
 
 Character mapping:
@@ -114,27 +125,19 @@ Character mapping:
 간 -> C0 02 -> Ｍビ
 다 -> C2 0C -> Ｏギ
 신 -> C5 D0 -> Ｒー
-참 -> C8 67 -> Ｕと
+참 -> FC 3A -> 廃
 날 -> C1 56 -> Ｎシ
 따 -> C2 8C -> Ｏレ
 라 -> C3 10 -> Ｐゲ
-와 -> C6 C2 -> ＳＯ
+와 -> FA C2 -> 目
 ```
 
-Makou Reactor supplies the final `FF` terminator automatically. Preserve its real line-break/control codes when using multiple lines.
+Makou Reactor writes the final string terminator automatically.
 
-## GitHub Actions
-
-Workflow:
+## GitHub Actions artifact
 
 ```text
-.github/workflows/build-c0-poc-patcher.yml
+ff7-2026-native-lead-reuse-patcher-windows-x64
 ```
 
-It validates the Python transformation sources, generates the compact C++ source, compiles the x64 patcher, verifies the executable, stages the package, and uploads:
-
-```text
-ff7-2026-compact-d1-patcher-windows-x64
-```
-
-The font TEX package itself is generated separately from the supplied original page images. No LGP editing is performed by the workflow or the scripts.
+The workflow validates that the generated patch source uses only `C0..C5`, requests only `jafont_7..12`, compiles the x64 executable, and uploads it. Font TEX generation is separate and does not edit an LGP archive.
