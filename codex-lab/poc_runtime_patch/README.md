@@ -2,7 +2,7 @@
 
 This folder builds an external Windows x64 runtime patcher for the native 2026 `FFVII.exe`.
 
-It does not modify `FFVII.exe` on disk. It validates runtime-decrypted code bytes, installs reversible detours in the live process, loads one Korean C0 font page through the native font-loader path, and maps Korean `C0 xx` text to that page.
+It does not modify `FFVII.exe` on disk. It validates runtime-decrypted code bytes, installs reversible detours in the live process, loads one Korean C0 font page through the native font-loader path, and maps the first selected Korean test sequence, `C0 21`, to that page.
 
 The first test glyph is:
 
@@ -100,9 +100,10 @@ Restore writes back the original overwrite bytes for all patch sites. Remote stu
 After successful install:
 
 - `C0 21` renders as the Korean glyph `가` from `korean_c0_page.tim`.
-- `C0 xx` is consumed as a two-byte Korean sequence in the common scanner and field scanner.
+- The common menu/battle render and width scanners consume only exact `C0 21` for this crash-safe first POC. Other original `C0 xx` bytes continue through the original single-byte path.
+- The field scanner hooks still implement the broader C0-page path for the target `jfleve.lgp` test and should be narrowed to `txt.cpp`-validated byte pairs before enabling a full unconverted playthrough.
 - The field layout scanner consumes the same two-byte sequence and uses width `64`.
 - Original `FA-FE` Japanese multibyte behavior remains on the original Japanese pages.
-- Ordinary non-C0 single-byte behavior is preserved, except that the Korean build intentionally reserves `C0-CC` as lead bytes.
+- Ordinary non-C0 single-byte behavior is preserved. Full `C0-CC` reservation is still the final Korean-resource goal, but it is not safe while unconverted original resources still pass through these scanners.
 
 The first field-string test vector is documented in `findings/first_korean_glyph_test_vector.md`.

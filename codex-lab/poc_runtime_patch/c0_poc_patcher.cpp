@@ -265,9 +265,11 @@ std::vector<uint8_t> MakeCommonRenderStub(uint64_t module_base) {
     std::vector<uint8_t> b = {
         0x80, 0xf9, 0xc0,             // cmp cl,0xC0
     };
-    size_t jb_original = AppendJcc8(b, 0x72);
-    b.insert(b.end(), {0x80, 0xf9, 0xcc}); // cmp cl,0xCC
-    size_t ja_original = AppendJcc8(b, 0x77);
+    size_t jne_original = AppendJcc8(b, 0x75);
+    b.insert(b.end(), {
+        0x41, 0x80, 0x7d, 0x00, 0x21, // cmp byte ptr [r13],0x21
+    });
+    size_t jne_original_trail = AppendJcc8(b, 0x75);
     b.insert(b.end(), {
         0x0f, 0xb6, 0xd9,             // movzx ebx,cl
         0x66, 0xc1, 0xe3, 0x08        // shl bx,8
@@ -284,8 +286,8 @@ std::vector<uint8_t> MakeCommonRenderStub(uint64_t module_base) {
     AppendAbsJmp(b, return_to_shl);
     size_t not_prefix_label = b.size();
     AppendAbsJmp(b, not_prefix);
-    PatchJcc8(b, jb_original, original);
-    PatchJcc8(b, ja_original, original);
+    PatchJcc8(b, jne_original, original);
+    PatchJcc8(b, jne_original_trail, original);
     PatchJcc8(b, ja_not_prefix, not_prefix_label);
     return b;
 }
@@ -296,9 +298,11 @@ std::vector<uint8_t> MakeCommonWidthStub(uint64_t module_base) {
     std::vector<uint8_t> b = {
         0x3c, 0xc0                    // cmp al,0xC0
     };
-    size_t jb_original = AppendJcc8(b, 0x72);
-    b.insert(b.end(), {0x3c, 0xcc});  // cmp al,0xCC
-    size_t ja_original = AppendJcc8(b, 0x77);
+    size_t jne_original = AppendJcc8(b, 0x75);
+    b.insert(b.end(), {
+        0x41, 0x80, 0x3e, 0x21        // cmp byte ptr [r14],0x21
+    });
+    size_t jne_original_trail = AppendJcc8(b, 0x75);
     b.insert(b.end(), {
         0x44, 0x0f, 0xb6, 0xc0,       // movzx r8d,al
         0x66, 0x41, 0xc1, 0xe0, 0x08  // shl r8w,8
@@ -317,8 +321,8 @@ std::vector<uint8_t> MakeCommonWidthStub(uint64_t module_base) {
     AppendAbsJmp(b, loop_continue);
     size_t not_prefix_label = b.size();
     AppendAbsJmp(b, not_prefix);
-    PatchJcc8(b, jb_original, original);
-    PatchJcc8(b, ja_original, original);
+    PatchJcc8(b, jne_original, original);
+    PatchJcc8(b, jne_original_trail, original);
     PatchJcc8(b, ja_not_prefix, not_prefix_label);
     return b;
 }

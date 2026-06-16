@@ -101,7 +101,9 @@ Therefore `C0 21` selects cell `0x21`, where the generated page contains `가`.
 
 ## Scanner Hooks
 
-The patcher treats `C0..CC` as Korean lead bytes in:
+The final Korean-resource direction is to treat `C0..CC` as Korean lead bytes after resources are converted. The current crash-safe first-glyph POC is narrower: the common menu/battle render and width scanners only accept exact `C0 21`, because unconverted original resources still contain legitimate single-byte `C0` text.
+
+Hooked scanner sites:
 
 - common render scanner `FUN_1415724a0`, RVA `0x1572577`
 - common width scanner `FUN_1415712b0`, RVA `0x1571336`
@@ -117,6 +119,17 @@ trail = source[1]
 encoded_glyph = C000 | trail
 cursor advances exactly two bytes
 ```
+
+The common scanner detours currently check both the lead byte and next byte:
+
+```text
+if lead == C0 and trail == 21:
+    pending_prefix = C000
+else:
+    execute original single-byte / FA-FE path
+```
+
+The field render/layout detours still implement the broader C0-page path for the `jfleve.lgp` test. They should be narrowed to `txt.cpp`-validated byte pairs before enabling broad testing on unconverted field resources.
 
 The lower width helper `FUN_141571220` already returns default width `0x40` for non-special multibyte pages, so `C0 21` measures as width `64`, matching renderer advance for the first POC.
 
@@ -136,4 +149,6 @@ Remote allocations are left inert until the process exits.
 - Staging may fail if the Steam game folder is not writable; in that case `korean_c0_page.tim` and `korean_c0_page.tex` can be copied manually beside `FFVII.exe`.
 - The direct loader attempt runs from an external remote thread. It restores the VM stack pointer, but arbitrary current VM-stack arguments after font loading are not enough to recreate the original font-loader context; observed direct-load test returned handle `0`.
 - If direct loading returns zero and `FUN_14156df20` does not run after the patcher installs its loader hook, the Korean handle remains zero and install fails safely. The current recommended test flow is to run the patcher first and then launch `FFVII.exe`.
+- A runtime test with successful Korean handle creation still exited back to the launcher after broad scanner hooks were installed. The common scanner hooks were narrowed to exact `C0 21` because unconverted original menu/startup strings can contain `C0` as an ordinary single-byte character.
+- The field hooks still need equivalent `txt.cpp`-validated gating if a field scene exits or corrupts text after the narrowed common-scanner build.
 - Full C1-CC page loading is not implemented in this vertical slice.

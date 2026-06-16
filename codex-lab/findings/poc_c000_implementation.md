@@ -2,7 +2,7 @@
 
 ## Current implementation: first Korean glyph
 
-The previous `C0 00 -> FA 00` normalization POC is superseded for the Korean build. Current behavior intentionally reserves `C0..CC` as Korean two-byte lead bytes.
+The previous `C0 00 -> FA 00` normalization POC is superseded for the Korean build. The final Korean-resource direction still reserves `C0..CC` as Korean two-byte lead bytes, but the current first-glyph POC must not treat every original `C0..CC` byte in unconverted resources as Korean.
 
 Implemented in `codex-lab/poc_runtime_patch/c0_poc_patcher.cpp`:
 
@@ -18,7 +18,8 @@ Implemented in `codex-lab/poc_runtime_patch/c0_poc_patcher.cpp`:
 - Stores the Korean C0 native resource handle in a patcher-owned remote state block.
 - Patches `FUN_141571ec0`, RVA `0x15720B8`, so page selector `C0` uses the Korean C0 handle and then joins the original glyph UV/render path.
 - Patches common render scanner `FUN_1415724a0`, common width scanner `FUN_1415712b0`, field render scanner `FUN_14156e430`, and field layout scanner `FUN_1415714b0`.
-- `C0..CC` are recognized as two-byte Korean prefixes; the current vertical slice has a loaded page for C0 only.
+- The common menu/battle scanners are narrowed to the exact first test sequence `C0 21`; this prevents original full-width single-byte `C0` text from being consumed as Korean during startup/menu rendering.
+- The field scanner hooks still use the broader C0-page path for the `jfleve.lgp` field test. They remain a known risk for unconverted field strings and should be narrowed to `txt.cpp`-validated byte pairs after the next runtime test.
 - Width for `C0 21` is `0x40`, matching the native default full-cell multibyte width and renderer advance.
 
 Safety behavior:
@@ -33,6 +34,7 @@ Known runtime dependency:
 - The hook uses the existing native `0x6710AC` font/resource loader command and passes the filename `korean_c0_page.tim` through confirmed unused space at `DAT_14207CDEC + 0xB8`.
 - The first artifact timed out when `FUN_14156df20` did not execute again after the hook was installed; the direct-load attempt was added to reduce that timing dependency.
 - The second artifact showed direct loading after the lifecycle had passed returned handle `0`, confirming that current arbitrary `DAT_1420395C8` values are not enough to recreate the original loader context.
+- The next artifact showed a nonzero Korean C0 page handle and successful hook installation, followed by a game exit back to the launcher. The most likely cause is the previous broad common `C0..CC` scanner consuming unconverted original text. The common scanners now require exact `C0 21`.
 - If the native resolver cannot find the loose external resource by that name, or if the resource command is only valid on the main thread and the fallback hook is never reached, install times out safely.
 
 Patch sites are recorded in `codex-lab/findings/poc_patch_sites.csv`.

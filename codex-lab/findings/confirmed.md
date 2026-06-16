@@ -22,6 +22,8 @@ Method:
 - Current runtime patch sites for the first field-visible POC are recorded in `codex-lab/findings/poc_patch_sites.csv`.
 - Runtime test of the first artifact confirmed that staging and signature validation succeeded, but a loader-hook-only install can time out when `FUN_14156df20` does not execute again after the hook is installed. The patcher now attempts a direct `FUN_14004AB00(0x6710AC, 5, ...)` load first and keeps the `FUN_14156df20` hook as fallback.
 - Runtime test of the direct-load artifact showed `direct_arg0=0x20014C8`, `direct_arg1=0x2001F9C`, `direct_arg2=0x18FEFC`, `direct_arg3=0x20014C8`, and `stored_handle=0`. This confirms that arbitrary current `DAT_1420395C8` VM-stack values are not sufficient to recreate the font-loader context after the lifecycle has already passed.
+- Runtime test of the next artifact confirmed successful Korean font loading (`Korean C0 page native handle` was nonzero) and successful scanner/renderer hook installation, followed by a game exit back to the launcher. This confirms the loader path is working and makes the broad common `C0-CC` scanner the primary crash suspect while original resources remain unconverted.
+- The common render and width scanner detours now accept only exact `C0 21` for the first-glyph POC. This is a tactical runtime safety gate; the `txt.cpp` mapping remains authoritative for the final C0-CC Korean encoding.
 
 ## PE and dump baseline
 
