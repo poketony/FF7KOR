@@ -3,8 +3,16 @@ from __future__ import annotations
 import json
 import runpy
 import struct
+import sys
 import zlib
 from pathlib import Path
+
+# Windows / GitHub Actions 콘솔 출력을 UTF-8로 강제
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
 LAB_ROOT = Path(__file__).resolve().parents[1]
