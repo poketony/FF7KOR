@@ -9,3 +9,29 @@
 /FF7_data/field/_build/
 /FF7_data/font_extension_test/
 FINAL FANTASY VII Steam Edition - 바로 가기.lnk
+FFVII.exe
+**/FFVII.exe
+
+# Runtime dumps and Ghidra local project files
+*.DMP
+*.dmp
+codex-lab/work/runtime_dump/
+runtime_dump/
+*.gpr
+*.rep/
+*.gbf
+*.gzf
+
+# Logs and local build outputs
+*.log
+build/
+build-*/
+poc_runtime_patch/c0_poc_patcher.exe
+poc_runtime_patch/*.obj
+poc_runtime_patch/*.pdb
+poc_runtime_patch/*.ilk
+poc_runtime_patch/*.exp
+poc_runtime_patch/*.lib
+poc_runtime_patch/build/
+poc_runtime_patch/build-*/
+poc_runtime_patch/artifact/

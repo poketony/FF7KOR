@@ -1,0 +1,87 @@
+name: Build C0 POC patcher
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "poc_runtime_patch/**"
+      - ".github/workflows/build-c0-poc-patcher.yml"
+  pull_request:
+    paths:
+      - "poc_runtime_patch/**"
+      - ".github/workflows/build-c0-poc-patcher.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build x64 Release patcher
+        shell: cmd
+        run: |
+          set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+          if not exist "%VSWHERE%" (
+            echo vswhere.exe was not found.
+            exit /b 1
+          )
+
+          for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo Visual Studio with MSVC x64 tools was not found.
+            exit /b 1
+          )
+
+          if exist "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" (
+            call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+          ) else (
+            call "%VSINSTALL%\VC\Auxiliary\Build\vcvars64.bat"
+          )
+          if errorlevel 1 exit /b %errorlevel%
+
+          where cl
+          where link
+          call poc_runtime_patch\build_msvc_x64.bat
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          $exe = "poc_runtime_patch/c0_poc_patcher.exe"
+          if (!(Test-Path $exe)) {
+            throw "Expected executable was not produced: $exe"
+          }
+          $item = Get-Item $exe
+          if ($item.Length -le 0) {
+            throw "Expected executable has zero size: $exe"
+          }
+          Write-Host "Verified $exe ($($item.Length) bytes)"
+
+      - name: Stage artifact files
+        shell: pwsh
+        run: |
+          $stage = "artifact/c0-poc-patcher-windows-x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item "poc_runtime_patch/c0_poc_patcher.exe" $stage
+          Copy-Item "poc_runtime_patch/README.md" $stage
+          if (Test-Path "findings/poc_patch_sites.csv") {
+            Copy-Item "findings/poc_patch_sites.csv" $stage
+          }
+
+          $timestamp = (Get-Date).ToUniversalTime().ToString("o")
+          @(
+            "commit_sha=${{ github.sha }}"
+            "build_timestamp_utc=$timestamp"
+          ) | Set-Content "$stage/build-info.txt" -Encoding ascii
+
+          Get-ChildItem -Recurse $stage | Select-Object FullName,Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: c0-poc-patcher-windows-x64
+          path: artifact/c0-poc-patcher-windows-x64/**
+          if-no-files-found: error

@@ -1,0 +1,184 @@
+# C0 00 runtime POC implementation
+
+Scope: first runnable POC for normalizing `C0 00` to the already-supported `FA 00` path in the runtime-decrypted FFVII 2026 native 64-bit executable.
+
+No original executable bytes are modified on disk. No Ghidra database changes are required.
+
+## Delivery method
+
+Chosen method: minimal external runtime patcher.
+
+Rejected for the first POC:
+
+- Runtime DLL injection: useful later, but slower to build and test.
+- Proxy DLL: more deployment surface and game-load-order assumptions.
+- Debugger-only patch: fastest manually, but weak logging and harder rollback.
+
+The external patcher is the smallest method that still satisfies the important safety properties:
+
+- ASLR-safe: resolves `FFVII.exe` module base at runtime and uses RVA.
+- Runtime-decryption-safe: waits until expected decrypted bytes are visible in the running process.
+- Reversible: stores original overwrite bytes and has a `restore` action.
+- Logged: records PID, module base, target addresses, original bytes, detour bytes, stub addresses, and success/failure.
+- No permanent EXE modification.
+
+Implementation folder:
+
+- `poc_runtime_patch/c0_poc_patcher.cpp`
+- `poc_runtime_patch/build_msvc_x64.bat`
+- `poc_runtime_patch/README.md`
+
+## Phase A verification
+
+`reference/FF7_TEXT_ENCODING_NOTES.md` was requested but is not present in this workspace. Encoding facts were taken from the existing findings and the current Ghidra/runtime-overlay verification.
+
+### Packed on-disk versus runtime-decrypted bytes
+
+The workspace `FFVII.exe` still contains protected/packed bytes at the mandatory offsets. The runtime overlay contains the executable instructions used for patching.
+
+| Site | RVA | Packed on-disk file offset | Packed bytes at offset | Runtime dump file offset | Runtime bytes |
+|---|---:|---:|---|---:|---|
+| render scanner | `0x1572577` | `0x1571977` | `C6 A0 E3 5D E9 71 AA ...` | `0x1571977` | `8D 41 06 44 0F B7 C9 ...` |
+| width scanner | `0x1571336` | `0x1570736` | `14 54 46 65 42 17 16 ...` | `0x1570736` | `8D 48 06 80 F9 04 77 ...` |
+
+The patcher validates the runtime-decrypted bytes in the live process and never patches the packed on-disk file.
+
+### `FUN_1415724a0` render scanner
+
+Instruction block:
+
+```asm
+141572560  movzx ecx, byte ptr [r13]
+141572565  lea   r13, [r13+1]
+141572569  test  bx, bx
+14157256c  jnz   1415725c6
+14157256e  cmp   cl, 0xff
+141572571  jz    1415726fc
+141572577  lea   eax, [rcx+6]
+14157257a  movzx r9d, cx
+14157257e  cmp   al, 4
+141572580  ja    14157258e
+141572582  movzx ebx, cx
+141572585  shl   bx, 8
+141572589  jmp   1415726d7
+```
+
+Register assumptions:
+
+- Current source byte: `CL`.
+- Source cursor: `R13`, already advanced by `lea r13,[r13+1]`.
+- Pending prefix: `BX`.
+- Next byte: read on the next loop iteration from `[R13]`.
+- Encoded glyph value: `R9W` after `or r9w,bx` at `0x1415726B5`.
+
+Existing `FA 00` path:
+
+1. `FA` is read into `CL`; `R13` advances to `p+1`.
+2. `(FA + 6) & 0xff <= 4` succeeds.
+3. `BX = 0xFA00`.
+4. Loop continues without rendering.
+5. Next iteration reads `00`; `R13` advances to `p+2`.
+6. Pending-prefix path executes `R9W = 0xFA00 | 0x00`.
+7. `FUN_141571ec0` receives `0xFA00`.
+8. `BX` is cleared at `0x1415726D5`.
+
+POC `C0 00` redirect:
+
+1. Stub checks `CL == 0xC0`.
+2. If true, it sets `EBX = 0xFA00`.
+3. It jumps to `0x1415726D7`, the same loop continuation used after a recognized prefix.
+4. The existing second-byte path consumes the real following byte.
+
+Overwrite selection:
+
+- Overwrite length: 14 bytes.
+- Overwritten bytes: `8D 41 06 44 0F B7 C9 3C 04 77 0C 0F B7 D9`.
+- Detour type: 14-byte RIP-indirect absolute jump.
+- Ghidra MCP returned no incoming xrefs for any byte in the overwritten range `0x141572577-0x141572584`.
+
+### `FUN_1415712b0` width scanner
+
+Instruction block:
+
+```asm
+141571320  movzx eax, byte ptr [r14]
+141571324  lea   r14, [r14+1]
+141571328  test  r8w, r8w
+14157132c  jnz   141571380
+14157132e  cmp   al, 0xff
+141571330  jz    141571464
+141571336  lea   ecx, [rax+6]
+141571339  cmp   cl, 4
+14157133c  ja    14157134c
+14157133e  movzx r8d, ax
+141571342  shl   r8w, 8
+141571347  jmp   14157144f
+```
+
+Register assumptions:
+
+- Current source byte: `AL`.
+- Source cursor: `R14`, already advanced by `lea r14,[r14+1]`.
+- Pending prefix: `R8W`.
+- Next byte: read on the next loop iteration from `[R14]`.
+- Encoded glyph value for width: `CX` after `or cx,r8w` at `0x141571428`.
+
+Existing `FA 00` path:
+
+1. `FA` is read into `AL`; `R14` advances to `p+1`.
+2. `(FA + 6) & 0xff <= 4` succeeds.
+3. `R8W = 0xFA00`.
+4. Loop continues without measuring.
+5. Next iteration reads `00`; `R14` advances to `p+2`.
+6. Pending-prefix path executes `CX = 0xFA00 | 0x00`.
+7. `FUN_141571220` receives `0xFA00`.
+8. `R8D` is cleared at `0x14157144C`.
+
+POC `C0 00` redirect:
+
+1. Stub checks `AL == 0xC0`.
+2. If true, it sets `R8D = 0xFA00`.
+3. It jumps to `0x14157144F`, the same loop continuation used after a recognized prefix.
+4. The existing second-byte path consumes the real following byte.
+
+Overwrite selection:
+
+- Overwrite length: 17 bytes.
+- Overwritten bytes: `8D 48 06 80 F9 04 77 0E 44 0F B7 C0 66 41 C1 E0 08`.
+- Detour type: 14-byte RIP-indirect absolute jump plus 3 NOPs.
+- Ghidra MCP returned no incoming xrefs for any byte in the overwritten range `0x141571336-0x141571346`.
+
+## Runtime patch behavior
+
+The patcher installs two remote stubs:
+
+- Render stub:
+  - `CL == C0`: set `EBX = FA00`, jump to render loop continuation.
+  - Otherwise preserve original `FA-FE` and non-prefix behavior.
+- Width stub:
+  - `AL == C0`: set `R8D = FA00`, jump to width loop continuation.
+  - Otherwise preserve original `FA-FE` and non-prefix behavior.
+
+The stubs use RIP-indirect absolute jumps, so they do not clobber general-purpose registers while returning to original code. This matters for the width non-prefix path because `AX` is still needed by `movzx ecx,ax`.
+
+If any install step fails after writing one site, the patcher restores both mandatory overwrite regions before returning an error.
+
+## Build result
+
+Build attempted with:
+
+```bat
+cmd /c poc_runtime_patch\build_msvc_x64.bat
+```
+
+Result in this Codex environment:
+
+```text
+cl.exe was not found, and vswhere.exe is not installed.
+```
+
+So the patcher source is implemented, but an executable was not built here. It should build from a Developer Command Prompt or on a machine with Visual Studio Build Tools and the MSVC x64 toolchain installed.
+
+## Restore behavior
+
+`c0_poc_patcher.exe restore` writes back the original overwrite bytes for both mandatory sites and flushes the instruction cache. Remote stub allocations are left inert and disappear when `FFVII.exe` exits.
